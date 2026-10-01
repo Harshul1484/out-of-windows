@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Runners are disposable VMs, so tests may read the real system.
+      OOW_TEST_REAL_SYSTEM: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "Not gofmt-formatted:"; echo "$unformatted"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -count=1 ./...
+      - name: fuzz safety invariants
+        run: |
+          go test ./internal/safety -run '^$' -fuzz FuzzGuardScope -fuzztime 60s
+          go test ./internal/safety -run '^$' -fuzz FuzzNormalizeIdempotent -fuzztime 30s
+      - name: build
+        run: go build -trimpath -o bin/oow.exe ./cmd/oow
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-2025'
+        with:
+          name: oow-windows-amd64
+          path: bin/oow.exe
+
+  e2e-real:
+    name: end-to-end on a real Windows Server 2025 VM
+    needs: test
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: build
+        run: go build -trimpath -o bin/oow.exe ./cmd/oow
+      - name: real cleanup with canaries
+        shell: pwsh
+        run: ./scripts/ci/e2e-real.ps1 -Oow ./bin/oow.exe

@@ -1,0 +1,15 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Simulated test sandboxes (see internal/testutil and internal/sandbox)
+/.sandbox/
+
+# Editors
+.vscode/
+.idea/
+*.swp
