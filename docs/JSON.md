@@ -106,7 +106,7 @@ stopped with Ctrl+C.
 ## `oow config protected --json` — `oow.protected/v1`
 
 `{"schema", "locations": [{"path", "label", "kind"}]}` with `kind` one of `never-remove`,
-`system-tree`, `user-content`, `protected`.
+`system-tree`, `user-content`, `protected`, `sensitive`.
 
 ## `oow version --json` — `oow.version/v1`
 

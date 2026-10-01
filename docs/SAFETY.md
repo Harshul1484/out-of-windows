@@ -64,6 +64,13 @@ The guard knows four kinds of location:
 | system tree | `Windows`, `Program Files (x86)`, `ProgramData`, `System Volume Information`, `$Recycle.Bin`, `pagefile.sys`, `Windows.old` … | only inside a reviewed exemption | never |
 | user content | Desktop, Documents, Downloads, Pictures, Music, Videos, OneDrive, Public folders | never | allowed (e.g. analyzer → Recycle Bin) |
 | protected | the user's whitelist, `oow`'s own config and data | never | never |
+| sensitive | `.ssh`, `.aws`, `.kube`, DPAPI keys, Credential Manager, Vault, password managers, wallets, VPN profiles, AI-tool state (`.claude`, `.ollama`…), editor `User` state, Docker Desktop data, `.rustup` | never | never |
+
+Independently of location, **sensitive file types** are never removed by automatic cleanup:
+VM/WSL/Docker disks (`*.vhdx`, `*.vhd`, `*.vmdk`…), password databases (`*.kdbx`), Outlook
+stores (`*.pst`, `*.ost`), private keys and certificates (`*.pfx`, `*.pem`, `*.key`, `id_rsa*`…),
+wallets, and browser credential databases (`Login Data`, `Cookies`, `key4.db`…). A user may
+still delete such a file explicitly.
 
 These come from discovery **plus a hard-coded baseline** (`C:\Windows`, `C:\Program Files`,
 … on the system drive, and system files on every fixed drive), so protection does not depend
@@ -121,7 +128,8 @@ test nor a sandbox run can delete anything outside its folder, whatever the code
 
 Interactive runs show the report, a checklist (with What/Why/After for the focused target)
 and a `[y/N]` confirmation that defaults to No. Non-interactive runs refuse to delete without
-`--yes` (exit code 4). Cache and temp cleanup deletes permanently because the data is
+`--yes` (exit code 4). `OOW_DRY_RUN=1` turns every destructive command into a preview,
+whatever flags are passed. Cache and temp cleanup deletes permanently because the data is
 regenerated; user files (analyzer, installers) will go to the Recycle Bin, and permanent
 deletion of user files will require typing a confirmation word.
 

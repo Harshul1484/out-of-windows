@@ -66,6 +66,9 @@ func runClean(ctx context.Context, app *App, o cleanOptions) error {
 		return editRuleWhitelist(app)
 	}
 
+	if app.ForceDryRun {
+		o.dryRun = true
+	}
 	rules, err := pickRules(o.rules)
 	if err != nil {
 		return err

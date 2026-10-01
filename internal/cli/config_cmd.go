@@ -48,8 +48,9 @@ func newConfigCmd(app *App) *cobra.Command {
 				"system-tree":  "system-owned: cleanup only inside reviewed exemptions",
 				"user-content": "your files: never touched by automatic cleanup",
 				"protected":    "whitelisted or used by " + buildinfo.Name,
+				"sensitive":    "credentials, keys, wallets, VM and AI-tool state: never deleted",
 			}
-			for _, k := range []string{"system-tree", "user-content", "protected", "never-remove"} {
+			for _, k := range []string{"system-tree", "user-content", "sensitive", "protected", "never-remove"} {
 				app.printf(" %s %s\n", ui.Bold.Render(k), ui.Muted.Render(ui.SymDot+" "+kinds[k]))
 				for _, l := range locs {
 					if l.Kind == k {

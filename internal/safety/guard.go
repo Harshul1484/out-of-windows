@@ -3,6 +3,7 @@ package safety
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -16,6 +17,7 @@ const (
 	ClassSystem                   // Windows, Program Files, ProgramData, ...
 	ClassCritical                 // a location that must never be removed itself
 	ClassProtected                // protected by the user's whitelist or owned by this tool
+	ClassSensitive                // credentials, keys, wallets, VM disks, AI-tool state
 )
 
 func (c Class) String() string {
@@ -28,6 +30,8 @@ func (c Class) String() string {
 		return "critical"
 	case ClassProtected:
 		return "protected"
+	case ClassSensitive:
+		return "sensitive"
 	}
 	return "ordinary"
 }
@@ -83,6 +87,35 @@ type Guard struct {
 	userContent []location
 	exemptions  []location // system subtrees that rules may clean inside
 	protected   []location // whitelist + this tool's own directories
+	sensitive   []location // credentials, keys, wallets, VM and AI-tool state
+}
+
+// sensitiveNames are file name patterns that automatic cleanup never removes,
+// wherever they are: virtual disks (WSL, Docker, Hyper-V), password databases,
+// mail stores, private keys, certificates, wallets and browser credential
+// databases. A user may still delete such a file explicitly.
+var sensitiveNames = []string{
+	"*.vhd", "*.vhdx", "*.avhdx", "*.vmdk", "*.vdi", "*.qcow2",
+	"*.kdbx", "*.kdb", "*.1pux", "*.opvault",
+	"*.pst", "*.ost",
+	"*.pfx", "*.p12", "*.pem", "*.key", "*.ppk", "*.gpg", "*.jks", "*.keystore",
+	"id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.ovpn",
+	"*.wallet", "wallet.dat",
+	"login data", "login data for account", "cookies", "web data", "history",
+	"bookmarks", "local state", "key4.db", "logins.json", "cert9.db",
+	"places.sqlite", "cookies.sqlite", "formhistory.sqlite",
+}
+
+// IsSensitiveName reports whether a file name is never removed by automatic
+// cleanup.
+func IsSensitiveName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, p := range sensitiveNames {
+		if ok, _ := filepath.Match(p, lower); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // NewGuard builds a guard from discovered locations plus a hard-coded
@@ -159,6 +192,55 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 	// clean inside. Adding an entry here requires a matching safety review.
 	g.exemptions = appendLoc(g.exemptions, locs.WindowsTemp, "Windows Temp directory", false)
 
+	// Credentials, keys, wallets, VM disks and AI-tool state: never deleted,
+	// whatever the purpose, and no rule may be rooted in or above them.
+	join := func(base string, rel ...string) string {
+		if base == "" {
+			return ""
+		}
+		return base + `\` + strings.Join(rel, `\`)
+	}
+	for _, s := range []struct{ path, label string }{
+		{join(locs.UserProfile, ".ssh"), "SSH keys"},
+		{join(locs.UserProfile, ".gnupg"), "GnuPG keys"},
+		{join(locs.UserProfile, ".aws"), "AWS credentials"},
+		{join(locs.UserProfile, ".azure"), "Azure credentials"},
+		{join(locs.UserProfile, ".kube"), "Kubernetes credentials"},
+		{join(locs.UserProfile, ".docker"), "Docker credentials"},
+		{join(locs.UserProfile, ".config", "gcloud"), "Google Cloud credentials"},
+		{join(locs.UserProfile, ".claude"), "Claude Code state"},
+		{join(locs.UserProfile, ".codex"), "Codex state"},
+		{join(locs.UserProfile, ".cursor"), "Cursor state"},
+		{join(locs.UserProfile, ".ollama"), "Ollama models"},
+		{join(locs.UserProfile, ".lmstudio"), "LM Studio models"},
+		{join(locs.UserProfile, ".cargo", "bin"), "installed Cargo binaries"},
+		{join(locs.UserProfile, ".rustup"), "Rust toolchains"},
+		{join(locs.RoamingAppData, "Microsoft", "Protect"), "Windows DPAPI master keys"},
+		{join(locs.RoamingAppData, "Microsoft", "Credentials"), "Windows Credential Manager"},
+		{join(locs.RoamingAppData, "Microsoft", "Crypto"), "Windows key store"},
+		{join(locs.RoamingAppData, "Microsoft", "SystemCertificates"), "certificate store"},
+		{join(locs.LocalAppData, "Microsoft", "Credentials"), "Windows Credential Manager"},
+		{join(locs.LocalAppData, "Microsoft", "Vault"), "Windows Vault"},
+		{join(locs.RoamingAppData, "gnupg"), "GnuPG keys"},
+		{join(locs.RoamingAppData, "Bitwarden"), "Bitwarden data"},
+		{join(locs.LocalAppData, "1Password"), "1Password data"},
+		{join(locs.RoamingAppData, "KeePass"), "KeePass data"},
+		{join(locs.LocalAppData, "KeePassXC"), "KeePassXC data"},
+		{join(locs.RoamingAppData, "Electrum"), "Electrum wallets"},
+		{join(locs.RoamingAppData, "Bitcoin"), "Bitcoin wallets"},
+		{join(locs.RoamingAppData, "Ethereum"), "Ethereum keystore"},
+		{join(locs.RoamingAppData, "Exodus"), "Exodus wallet"},
+		{join(locs.RoamingAppData, "Ledger Live"), "Ledger Live data"},
+		{join(locs.UserProfile, "OpenVPN"), "OpenVPN profiles"},
+		{join(locs.RoamingAppData, "Claude"), "Claude desktop data"},
+		{join(locs.LocalAppData, "AnthropicClaude"), "Claude desktop app"},
+		{join(locs.RoamingAppData, "Code", "User"), "VS Code settings and state"},
+		{join(locs.RoamingAppData, "Cursor", "User"), "Cursor settings and state"},
+		{join(locs.LocalAppData, "Docker"), "Docker Desktop data"},
+	} {
+		g.sensitive = appendLoc(g.sensitive, s.path, s.label, false)
+	}
+
 	for _, p := range locs.SelfDirs {
 		g.protected = appendLoc(g.protected, p, "used by "+toolDirLabel, false)
 	}
@@ -213,6 +295,14 @@ func (g *Guard) Check(req Request) Decision {
 			return deny(ClassProtected, "protected: %s is %s", w.path, w.label)
 		}
 	}
+	for _, s := range g.sensitive {
+		if IsWithin(p, s.path) || IsWithin(s.path, p) {
+			return deny(ClassSensitive, "sensitive: %s holds %s", s.path, s.label)
+		}
+	}
+	if req.Purpose == PurposeCleanup && IsSensitiveName(baseName(p)) {
+		return deny(ClassSensitive, "sensitive file type: %s is never removed by automatic cleanup", baseName(p))
+	}
 
 	if req.Purpose == PurposeCleanup && strings.TrimSpace(req.Scope) == "" {
 		return deny(ClassOrdinary, "automatic cleanup requires a validated cleanup location")
@@ -259,7 +349,7 @@ func (g *Guard) ValidateRoot(root string) (string, error) {
 	if IsVolumeRoot(r) {
 		return "", fmt.Errorf("%w: %s is a drive root", ErrProtectedRoot, r)
 	}
-	for _, list := range [][]location{g.critical, g.system, g.userContent, g.protected} {
+	for _, list := range [][]location{g.critical, g.system, g.userContent, g.protected, g.sensitive} {
 		for _, c := range list {
 			if IsStrictlyWithin(c.path, r) {
 				return "", fmt.Errorf("%w: %s contains the %s (%s)", ErrProtectedRoot, r, c.label, c.path)
@@ -274,6 +364,11 @@ func (g *Guard) ValidateRoot(root string) (string, error) {
 	for _, w := range g.protected {
 		if IsWithin(r, w.path) {
 			return "", fmt.Errorf("%w: %s is %s", ErrProtectedRoot, w.path, w.label)
+		}
+	}
+	for _, s := range g.sensitive {
+		if IsWithin(r, s.path) {
+			return "", fmt.Errorf("%w: %s holds %s", ErrProtectedRoot, s.path, s.label)
 		}
 	}
 	if u, ok := g.containing(g.userContent, r); ok {
@@ -301,6 +396,9 @@ func (g *Guard) Classify(p string) Class {
 	}
 	if _, ok := g.containing(g.protected, n); ok {
 		return ClassProtected
+	}
+	if _, ok := g.containing(g.sensitive, n); ok {
+		return ClassSensitive
 	}
 	if _, ok := g.containing(g.system, n); ok {
 		return ClassSystem
@@ -335,6 +433,7 @@ func (g *Guard) ProtectedLocations() []ProtectedLocation {
 	add(g.system, "system-tree")
 	add(g.userContent, "user-content")
 	add(g.protected, "protected")
+	add(g.sensitive, "sensitive")
 	add(g.critical, "never-remove")
 	sort.Slice(out, func(i, j int) bool {
 		if Key(out[i].Path) != Key(out[j].Path) {
@@ -361,6 +460,14 @@ func (g *Guard) containing(list []location, p string) (location, bool) {
 		}
 	}
 	return location{}, false
+}
+
+// baseName returns the last element of a normalized Windows path.
+func baseName(normalized string) string {
+	if i := strings.LastIndexByte(normalized, '\\'); i >= 0 {
+		return normalized[i+1:]
+	}
+	return normalized
 }
 
 func deny(c Class, format string, args ...any) Decision {

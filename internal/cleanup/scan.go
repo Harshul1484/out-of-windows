@@ -277,8 +277,12 @@ func scanRoot(ctx context.Context, env *Env, r *Rule, rs *RuleScan, root string,
 				return false
 			}
 			d := env.Guard.Check(safety.Request{Path: e.Path, Purpose: safety.PurposeCleanup, Scope: root})
-			if d.Class == safety.ClassProtected {
+			switch d.Class {
+			case safety.ClassProtected:
 				rs.Skipped.Add(e.Path, reasonWhitelist)
+				return false
+			case safety.ClassSensitive:
+				rs.Skipped.Add(e.Path, reasonSensitive)
 				return false
 			}
 			if d.Allowed && len(r.Include) == 0 && !e.Fingerprint.CreationTime().After(cutoff) {
@@ -295,8 +299,12 @@ func scanRoot(ctx context.Context, env *Env, r *Rule, rs *RuleScan, root string,
 			return false
 		}
 		if d := env.Guard.Check(safety.Request{Path: e.Path, Purpose: safety.PurposeCleanup, Scope: root}); !d.Allowed {
-			if d.Class == safety.ClassProtected {
+			switch d.Class {
+			case safety.ClassProtected:
 				rs.Skipped.Add(e.Path, reasonWhitelist)
+				return false
+			case safety.ClassSensitive:
+				rs.Skipped.Add(e.Path, reasonSensitive)
 				return false
 			}
 			slog.Warn("guard refused scan candidate", "rule", r.ID, "path", e.Path, "reason", d.Reason)

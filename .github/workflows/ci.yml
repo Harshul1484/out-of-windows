@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: test (${{ matrix.os }})
@@ -21,8 +25,8 @@ jobs:
       # Runners are disposable VMs, so tests may read the real system.
       OOW_TEST_REAL_SYSTEM: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -40,7 +44,7 @@ jobs:
           go test ./internal/safety -run '^$' -fuzz FuzzNormalizeIdempotent -fuzztime 30s
       - name: build
         run: go build -trimpath -o bin/oow.exe ./cmd/oow
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.os == 'windows-2025'
         with:
           name: oow-windows-amd64
@@ -51,8 +55,8 @@ jobs:
     needs: test
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: build

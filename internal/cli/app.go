@@ -58,14 +58,15 @@ type App struct {
 	SandboxDir string
 
 	// Derived during setup.
-	Sandbox   string // absolute sandbox root, "" when using the real system
-	Dirs      config.Dirs
-	Config    *config.Config
-	ConfigErr error
-	Locations safety.Locations
-	Guard     *safety.Guard
-	Elevated  bool
-	closeLog  func()
+	ForceDryRun bool   // OOW_DRY_RUN=1: every destructive command only previews
+	Sandbox     string // absolute sandbox root, "" when using the real system
+	Dirs        config.Dirs
+	Config      *config.Config
+	ConfigErr   error
+	Locations   safety.Locations
+	Guard       *safety.Guard
+	Elevated    bool
+	closeLog    func()
 }
 
 // interactive reports whether we can prompt the user.
@@ -85,6 +86,7 @@ func (a *App) tty() bool {
 }
 
 func (a *App) setup() error {
+	a.ForceDryRun = os.Getenv("OOW_DRY_RUN") == "1"
 	root := a.SandboxDir
 	if root == "" {
 		root = os.Getenv(sandbox.EnvVar)

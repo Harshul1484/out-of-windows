@@ -148,9 +148,17 @@ func TestUserTempScan(t *testing.T) {
 	if rs.KeptRecent != 2 {
 		t.Errorf("KeptRecent = %d, want 2", rs.KeptRecent)
 	}
-	reasons := rs.Skipped.Reasons()
-	if len(reasons) != 1 || !strings.Contains(reasons[0].Reason, "junction") {
-		t.Errorf("skipped reasons = %+v, want the junction", reasons)
+	counts := map[string]int{}
+	for _, r := range rs.Skipped.Reasons() {
+		counts[r.Reason] = r.Count
+	}
+	if counts["link or junction (not followed)"] != 1 || counts["sensitive data (keys, credentials, VM disks)"] != 2 || len(counts) != 2 {
+		t.Errorf("skipped reasons = %+v, want 1 junction and 2 sensitive files", counts)
+	}
+	for _, never := range []string{"signing.pfx", "ext4.vhdx"} {
+		if contains(got, never) {
+			t.Errorf("sensitive file %s selected", never)
+		}
 	}
 }
 
@@ -192,6 +200,10 @@ func TestExecuteRemovesOnlyCandidates(t *testing.T) {
 		`C\Program Files\Contoso\contoso.exe`,
 		`C\ProgramData\Contoso\license.dat`,
 		`C\Users\sandbox\AppData\Local\Contoso\settings.json`,
+		`C\Users\sandbox\AppData\Local\Temp\cert-export\signing.pfx`,
+		`C\Users\sandbox\AppData\Local\Temp\wsl-import\ext4.vhdx`,
+		`C\Users\sandbox\.ssh\id_ed25519`,
+		`C\Users\sandbox\AppData\Roaming\Microsoft\Protect\S-1-5-21-1\masterkey`,
 	} {
 		if !w.Exists(kept) {
 			t.Errorf("%s was removed", kept)

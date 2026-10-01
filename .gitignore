@@ -13,3 +13,7 @@ coverage.*
 .vscode/
 .idea/
 *.swp
+
+# Personal agent overrides
+AGENTS.local.md
+CLAUDE.local.md

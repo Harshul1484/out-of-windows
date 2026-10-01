@@ -241,6 +241,63 @@ func TestBaselineProtectionWithoutDiscovery(t *testing.T) {
 	}
 }
 
+func TestSensitiveLocationsNeverDeletable(t *testing.T) {
+	g := NewGuard(testLocations(), nil)
+	for _, p := range []string{
+		`C:\Users\alice\.ssh\id_ed25519`, `C:\Users\alice\.ssh`, `C:\Users\alice\.aws\credentials`,
+		`C:\Users\alice\AppData\Roaming\Microsoft\Protect\S-1-5-21\key`,
+		`C:\Users\alice\AppData\Roaming\Microsoft\Credentials\ABCD`,
+		`C:\Users\alice\AppData\Local\Microsoft\Vault\x`,
+		`C:\Users\alice\AppData\Roaming\Bitwarden\data.json`,
+		`C:\Users\alice\AppData\Roaming\Electrum\wallets\default_wallet`,
+		`C:\Users\alice\.claude\settings.json`, `C:\Users\alice\.ollama\models\blob`,
+		`C:\Users\alice\AppData\Roaming\Code\User\settings.json`,
+		`C:\Users\alice\AppData\Local\Docker\wsl\disk\docker_data.vhdx`,
+		`C:\Users\alice\.cargo\bin\cargo.exe`,
+	} {
+		for _, purpose := range []Purpose{PurposeCleanup, PurposeUserSelected} {
+			d := g.Check(Request{Path: p, Purpose: purpose, Scope: `C:\Users\alice`})
+			if d.Allowed {
+				t.Errorf("%q allowed (purpose %d)", p, purpose)
+			}
+		}
+	}
+	for _, root := range []string{`C:\Users\alice\.ssh`, `C:\Users\alice\.aws\cache`, `C:\Users\alice\AppData\Roaming\Code\User\workspaceStorage`} {
+		if _, err := g.ValidateRoot(root); err == nil {
+			t.Errorf("sensitive root %q accepted", root)
+		}
+	}
+	// Cache folders next to sensitive ones are still valid roots.
+	for _, root := range []string{`C:\Users\alice\AppData\Roaming\Code\Cache`, `C:\Users\alice\.cargo\registry\cache`} {
+		if _, err := g.ValidateRoot(root); err != nil {
+			t.Errorf("cache root %q rejected: %v", root, err)
+		}
+	}
+}
+
+func TestSensitiveFileTypesNeverAutoCleaned(t *testing.T) {
+	g := NewGuard(testLocations(), nil)
+	scope := `C:\Users\alice\AppData\Local\Temp`
+	for _, name := range []string{
+		"ext4.vhdx", "disk.VHD", "vault.kdbx", "archive.pst", "mail.ost", "cert.pfx", "server.key",
+		"id_rsa", "id_ed25519.pub", "wallet.dat", "Login Data", "Cookies", "key4.db", "logins.json",
+	} {
+		p := scope + `\x\` + name
+		if d := g.Check(Request{Path: p, Purpose: PurposeCleanup, Scope: scope}); d.Allowed || d.Class != ClassSensitive {
+			t.Errorf("cleanup of %s = %+v", name, d)
+		}
+	}
+	// A user may still delete such a file explicitly (e.g. an old VM disk in Downloads).
+	if d := g.Check(Request{Path: `C:\Users\alice\Downloads\old-vm.vhdx`, Purpose: PurposeUserSelected}); !d.Allowed {
+		t.Errorf("explicit deletion denied: %s", d.Reason)
+	}
+	for _, ok := range []string{"setup.log", "keyboard.txt", "history.txt.tmp", "cookies-backup.zip"} {
+		if IsSensitiveName(ok) {
+			t.Errorf("%s wrongly classified as sensitive", ok)
+		}
+	}
+}
+
 func TestCleanupWithoutScopeDenied(t *testing.T) {
 	g := NewGuard(testLocations(), nil)
 	d := g.Check(Request{Path: `E:\scratch\file.tmp`, Purpose: PurposeCleanup})

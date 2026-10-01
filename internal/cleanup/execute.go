@@ -17,6 +17,7 @@ const (
 	reasonCloud     = "cloud placeholder (not stored locally)"
 	reasonPolicy    = "refused by safety policy"
 	reasonWhitelist = "protected by your whitelist"
+	reasonSensitive = "sensitive data (keys, credentials, VM disks)"
 	reasonGone      = "already removed"
 	reasonInUse     = "in use by another program"
 	reasonDenied    = "permission denied"

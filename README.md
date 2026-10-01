@@ -11,9 +11,8 @@ installers and developer build artifacts, and watch your system live.
 > whitelist are protected by a dedicated safety layer that is tested against attack-style
 > scenarios (junction swaps, path tricks, files changed mid-run).
 
-Inspired by the workflow of [Mole](https://github.com/tw93/mole) for macOS, rebuilt from
-scratch for Windows internals: Known Folders, NTFS reparse points, Windows Installer, AppX,
-winget, and Windows-specific caches.
+Built from scratch around Windows internals: Known Folders, NTFS reparse points, Windows
+Installer, AppX, winget, and Windows-specific caches.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────────╮
@@ -111,12 +110,19 @@ and uninstalled-app leftovers arrive in Phases 2–3.
 - **Links are never followed.** Junctions and symlinks are reported as skipped.
 - **No admin unless needed.** Targets that need administrator rights are skipped with an
   explanation unless you run from an elevated terminal.
-- **Dry run everywhere, history always.** Every destructive command supports `--dry-run`;
-  every real run is recorded (`oow history`, disable with `OOW_NO_OPLOG=1`).
+- **Credentials are untouchable.** SSH/cloud keys, DPAPI and Credential Manager stores,
+  password managers, wallets, VM/WSL disks and AI-tool state are never deleted, and sensitive
+  file types (`.vhdx`, `.kdbx`, `.pst`, `.pfx`, `id_rsa`…) are never auto-cleaned anywhere.
+- **Dry run everywhere, history always.** Every destructive command supports `--dry-run`
+  (or set `OOW_DRY_RUN=1` to force previews); every real run is recorded (`oow history`,
+  disable with `OOW_NO_OPLOG=1`).
 - **Honest numbers.** Reports show the bytes removed *and* the measured change in free
   space. No "PC health scores", no registry cleaning, no RAM "boosting", no telemetry.
 
-The full model is in [docs/SAFETY.md](docs/SAFETY.md).
+The full model is in [docs/SAFETY.md](docs/SAFETY.md); the current security review is in
+[SECURITY_AUDIT.md](SECURITY_AUDIT.md), and vulnerabilities can be reported privately as
+described in [SECURITY.md](SECURITY.md). Contributors and AI agents follow
+[AGENTS.md](AGENTS.md).
 
 ## Architecture
 

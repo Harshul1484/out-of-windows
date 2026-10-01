@@ -211,6 +211,23 @@ func TestCleanYesRemovesJunkAndRecordsHistory(t *testing.T) {
 	}
 }
 
+func TestDryRunEnvForcesPreview(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("OOW_DRY_RUN", "1")
+	before := testutil.SnapshotDir(t, e.system())
+	out, _, code := e.run("clean", "--yes", "--json")
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	r := decode[cleanResult](t, out)
+	if !r.DryRun || r.Summary.Executed {
+		t.Fatalf("OOW_DRY_RUN ignored: %+v", r.Summary)
+	}
+	if len(testutil.SnapshotDir(t, e.system())) != len(before) {
+		t.Fatal("files removed with OOW_DRY_RUN=1")
+	}
+}
+
 func TestCleanRuleFilter(t *testing.T) {
 	e := newEnv(t)
 	out, _, code := e.run("clean", "--rule", "windows.directx-shader-cache", "--yes", "--json")

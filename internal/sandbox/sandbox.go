@@ -109,6 +109,14 @@ func Seed(root string) error {
 		{filepath.Join(tmp, "fresh-download.part"), 250000, 2 * time.Hour},
 		{filepath.Join(tmp, "vscode-ipc.sock.lock"), 10, 10 * time.Minute},
 
+		// Old but sensitive files in Temp: never removed automatically.
+		{filepath.Join(tmp, "cert-export", "signing.pfx"), 4000, 30 * day},
+		{filepath.Join(tmp, "wsl-import", "ext4.vhdx"), 5000000, 30 * day},
+
+		// Credentials in the profile: never touched, whatever happens.
+		{filepath.Join(rel(l.UserProfile), ".ssh", "id_ed25519"), 400, 200 * day},
+		{filepath.Join(rel(l.RoamingAppData), "Microsoft", "Protect", "S-1-5-21-1", "masterkey"), 740, 200 * day},
+
 		// Windows temp (requires administrator on a real system).
 		{filepath.Join(rel(l.WindowsTemp), "MpCmdRun.log"), 40000, 15 * day},
 		{filepath.Join(rel(l.WindowsTemp), "DismHost", "dism.log"), 90000, 15 * day},
