@@ -1,0 +1,6 @@
+# Keep LF everywhere so gofmt and diffs behave the same on every machine,
+# including Windows CI runners that default to core.autocrlf=true.
+* text=auto eol=lf
+*.exe binary
+*.png binary
+*.gif binary
