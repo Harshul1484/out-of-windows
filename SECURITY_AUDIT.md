@@ -1,6 +1,6 @@
 # Security Audit
 
-Status: **v0.1.0-dev (Phases 1–3)**. This document records what the code does today. Planned
+Status: **v0.1.0-dev (Phases 1–4)**. This document records what the code does today. Planned
 controls are listed separately under *Known limitations and future work*; nothing in the
 other sections is aspirational. Update this file in the same change as any safety-relevant
 code.
@@ -176,6 +176,15 @@ key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlit
 - Only high-confidence leftovers are preselected; `--yes` moves only those. Program Files and
   ProgramData candidates require elevation and are otherwise offered in an elevated window.
 
+### Disk analyzer
+
+- Scanning is read-only and never follows links or junctions; unreadable folders are counted.
+- Deletion exists only in the interactive explorer, for items the user marked and confirmed
+  on screen. Each item must pass `Guard.Check` with `PurposeUserSelected` (system trees,
+  critical, protected and sensitive locations are refused; user content is allowed) and is
+  then moved to the Recycle Bin through the verified recycle sink (`filesystem.Verify`, fixed
+  drives only). There is no permanent delete in the analyzer. Every move is recorded in history.
+
 ### Tool-owned and whitelisted locations
 
 `oow`'s own config and data directories, and every path in the user's whitelist, are
@@ -285,6 +294,9 @@ protected together with their ancestors (deleting a parent would delete them).
 | Leftovers: evidence, confidence, claims, traces, broken entries, sensitive content, admin, junctions, swaps | `internal/leftovers/leftovers_test.go` |
 | Uninstall/leftovers CLI (dry run, confirmation, JSON, failure, end to end) | `internal/cli/uninstall_test.go` |
 | Name normalization and command-line parsing | `internal/apps/apps_test.go` |
+| Analyzer totals, links, unreadable folders, cancellation, largest files | `internal/analyzer/analyzer_test.go` |
+| Analyzer Recycle Bin guard (user files yes; system, sensitive, folder roots, junctions no) | `internal/cli` `TestRecyclePathsGuard` |
+| Explorer navigation, confirmation, size updates | `internal/ui/explorer_test.go` |
 | End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin, uninstall of a registered app with leftovers) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the

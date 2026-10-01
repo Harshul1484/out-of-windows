@@ -104,6 +104,9 @@ arrives.
   verification through a `Checker`.
 - `internal/leftovers/`: evidence (uninstalled, history, broken entries, usage traces), claims
   (installed apps, processes, services, startup), `Find` with confidence, `Recycle`.
+- `internal/analyzer/`: parallel read-only scanner (folder tree, largest-files heap), on-demand
+  file listing. The explorer TUI is `internal/ui/explorer.go`; deletion goes through
+  `App.recyclePaths` (guard user-selected purpose + verified recycle).
 - `internal/safety/`: Win32 path normalization (`path.go`), discovered locations
   (`locations.go`, `locations_windows.go`), and the `Guard` (`guard.go`): protected,
   system, user-content, sensitive and whitelisted locations, exemptions, root validation.

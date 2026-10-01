@@ -24,7 +24,7 @@ func Walk(ctx context.Context, root string, visit VisitFunc, onErr ErrorFunc) er
 	if err != nil {
 		return mapError(err)
 	}
-	rootEntry := entryFromInfo(root, info)
+	rootEntry := EntryFromInfo(root, info)
 	if rootEntry.Reparse {
 		return ErrReparsePoint
 	}
@@ -57,7 +57,7 @@ func Walk(ctx context.Context, root string, visit VisitFunc, onErr ErrorFunc) er
 				// The entry vanished between listing and stat; nothing to do.
 				continue
 			}
-			e := entryFromInfo(p, info)
+			e := EntryFromInfo(p, info)
 			descend := visit(e)
 			if descend && e.IsDir() && !e.Reparse {
 				stack = append(stack, p)
@@ -73,7 +73,7 @@ func Lstat(path string) (Entry, error) {
 	if err != nil {
 		return Entry{}, mapError(err)
 	}
-	return entryFromInfo(path, info), nil
+	return EntryFromInfo(path, info), nil
 }
 
 // SizeOf sums the logical size of all files below root (or of root itself if

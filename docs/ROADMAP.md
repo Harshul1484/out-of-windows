@@ -50,11 +50,17 @@ before the next begins.
 - winget is detected but not required: for apps it can see, winget runs the same registered
   uninstaller that oow runs directly
 
-## Phase 4 — Disk analyzer
+## Phase 4 — Disk analyzer ✅
 
-- [ ] Parallel scanner with progress and cancellation
-- [ ] Interactive explorer (sort, filter, search, drill-down), `--large`, `--min-size`
-- [ ] Recycle Bin deletion of selected items
+- [x] Parallel, cancellable scanner with live progress; folder tree with sizes, file counts
+      and newest change; links never followed; unreadable folders counted, not fatal
+- [x] Interactive explorer: drill down, back, sort (size, name, files, modified), filter,
+      search with next match, largest-files view, reveal in File Explorer, rescan
+- [x] `--large`, `--min-size`, `--top`; drive picker; `--json` with `--depth`
+- [x] Recycle Bin deletion of marked items with in-screen confirmation, guarded as explicit
+      user selection (never system, protected or sensitive locations), recorded in history
+- Not planned: raw MFT reading (needs administrator rights and raw volume access); hard links
+  are counted per link
 
 ## Phase 5 — Monitoring
 

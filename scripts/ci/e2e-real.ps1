@@ -185,6 +185,20 @@ Write-Host '::group::leftovers scan (read-only)'
 if ($LASTEXITCODE -ne 0) { throw "leftovers dry run exited $LASTEXITCODE" }
 Write-Host '::endgroup::'
 
+Write-Host '::group::analyze (read-only)'
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$an = & $Oow analyze C:\ --json --top 5 | ConvertFrom-Json
+$sw.Stop()
+if ($LASTEXITCODE -ne 0 -or $an.schema -ne 'oow.analyze/v1' -or $an.root.size -le 0) { throw 'analyze C:\ failed' }
+Write-Host ("C:\ scanned in {0:n1}s: {1:n1} GB in {2:n0} files; {3} unreadable folders; {4} links not followed" -f `
+    $sw.Elapsed.TotalSeconds, ($an.root.size / 1GB), $an.root.files, $an.scan_errors, $an.links)
+$an.root.children | Select-Object -First 8 name, @{n = 'GB'; e = { '{0:n2}' -f ($_.size / 1GB) } } | Format-Table | Out-String | Write-Host
+$lg = & $Oow analyze $env:USERPROFILE --large --min-size 1MB --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $lg.schema -ne 'oow.large/v1') { throw 'analyze --large failed' }
+& $Oow analyze $env:USERPROFILE --large --top 5
+Assert-Canaries
+Write-Host '::endgroup::'
+
 Write-Host '::group::history'
 & $Oow history
 Write-Host '::endgroup::'

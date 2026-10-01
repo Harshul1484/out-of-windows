@@ -172,6 +172,41 @@ After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1
   `medium` (a single exact-name signal, and everything based on usage traces).
 - `needs_admin`: the folder is in Program Files or ProgramData and `oow` is not elevated.
 
+## `oow analyze --json` — `oow.analyze/v1`
+
+```json
+{
+  "schema": "oow.analyze/v1",
+  "root": {
+    "name": "C:\\", "path": "C:\\", "size": 742000000000, "files": 1203344, "percent_of_parent": 0,
+    "children": [
+      { "name": "Users", "path": "C:\\Users", "size": 286000000000, "files": 400000, "percent_of_parent": 38.5 },
+      { "name": "Documents and Settings", "path": "C:\\Documents and Settings", "size": 0, "files": 0,
+        "percent_of_parent": 0, "link": true },
+      { "name": "System Volume Information", "path": "...", "size": 0, "files": 0, "percent_of_parent": 0,
+        "error": "Access is denied." }
+    ]
+  },
+  "disk_total": 1000000000000,
+  "scan_status": "complete",
+  "scan_errors": 0,
+  "links": 1,
+  "duration_ms": 41000,
+  "largest": [ { "path": "C:\\Users\\me\\Videos\\recording.mp4", "size": 7194139648, "modified": "2026-09-30T18:02:11+05:30" } ]
+}
+```
+
+- `children` nest `--depth` levels (default 1), largest first.
+- `scan_status` is `partial` when some folders could not be read (`scan_errors`); sizes then
+  cover only what was readable. `link: true` marks links and junctions, which are not followed.
+- Sizes are logical file sizes; hard-linked files are counted once per link.
+- `largest` holds up to `--top` files (default 50).
+
+## `oow analyze --large --json` — `oow.large/v1`
+
+`{"schema", "root", "min_size", "files": [{"path", "size", "modified"}], "scan_errors", "duration_ms"}`,
+largest first, filtered by `--min-size`, at most `--top` entries.
+
 ## `oow config --json` — `oow.config/v1`
 
 `{"schema", "config_file", "data_dir", "sandbox", "config": {"version", "whitelist":

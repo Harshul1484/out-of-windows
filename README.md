@@ -42,7 +42,7 @@ say so and exit with code 3.
 | `oow config` | Settings, whitelist, list of protected locations | ✅ |
 | `oow history` | What previous runs removed | ✅ |
 | `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin | ✅ |
-| `oow analyze` | Interactive disk explorer, large files | Phase 4 |
+| `oow analyze` | Interactive disk explorer, large files, Recycle Bin deletion | ✅ |
 | `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard | Phase 5 |
 | `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
 | `oow purge` / `installer` | Developer artifacts, unused installers | Phase 7 |
@@ -78,6 +78,9 @@ oow uninstall            # pick apps, run their uninstallers, review leftovers
 oow uninstall --list     # every installed app (registry, Store, Scoop, Chocolatey)
 oow uninstall "Contoso Studio" --dry-run   # what would run and what is related
 oow leftovers --dry-run  # folders left behind by apps that are gone
+oow analyze              # pick a drive and explore it (enter, backspace, s, f, /, L, d, o, r)
+oow analyze --large --min-size 1GB         # largest files
+oow analyze D:\Projects --json --depth 2   # machine-readable breakdown
 oow history              # what was removed and when
 ```
 
