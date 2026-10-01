@@ -66,6 +66,7 @@ type cleanResult struct {
 	Summary struct {
 		ReclaimableFiles int   `json:"reclaimable_files"`
 		ReclaimableBytes int64 `json:"reclaimable_bytes"`
+		SelectedBytes    int64 `json:"selected_bytes"`
 		Executed         bool  `json:"executed"`
 		Removed          int   `json:"removed"`
 		ReclaimedBytes   int64 `json:"reclaimed_bytes"`
@@ -126,8 +127,8 @@ func TestCleanDryRunJSONChangesNothing(t *testing.T) {
 	if r.Schema != "oow.clean/v1" || !r.DryRun || !r.Sandbox || r.Summary.Executed {
 		t.Errorf("header = %+v", r)
 	}
-	if r.Summary.ReclaimableFiles != 10 {
-		t.Errorf("reclaimable files = %d, want 10", r.Summary.ReclaimableFiles)
+	if r.Summary.ReclaimableFiles < 30 {
+		t.Errorf("reclaimable files = %d, want at least 30", r.Summary.ReclaimableFiles)
 	}
 	for _, rule := range r.Rules {
 		for _, it := range rule.Items {
@@ -171,7 +172,7 @@ func TestCleanYesRemovesJunkAndRecordsHistory(t *testing.T) {
 		t.Fatalf("code = %d\n%s", code, out)
 	}
 	r := decode[cleanResult](t, out)
-	if !r.Summary.Executed || r.Summary.Errors != 0 || r.Summary.ReclaimedBytes != r.Summary.ReclaimableBytes {
+	if !r.Summary.Executed || r.Summary.Errors != 0 || r.Summary.ReclaimedBytes != r.Summary.SelectedBytes {
 		t.Errorf("summary = %+v", r.Summary)
 	}
 	for _, gone := range []string{
@@ -208,6 +209,40 @@ func TestCleanYesRemovesJunkAndRecordsHistory(t *testing.T) {
 	if len(h.Records) != 1 || h.Records[0].Command != "clean" || !h.Records[0].Sandbox ||
 		h.Records[0].Reclaimed != r.Summary.ReclaimedBytes {
 		t.Errorf("history = %+v", h.Records)
+	}
+}
+
+func TestOptInTargetsNeedExplicitSelection(t *testing.T) {
+	e := newEnv(t)
+	if _, _, code := e.run("clean", "--yes", "--json"); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	for _, kept := range []string{
+		`C\$Recycle.Bin\S-1-5-21-sandbox\$RDEF456\old-photo.jpg`,
+		`C\Users\sandbox\AppData\Local\JetBrains\IntelliJIdea2025.2\caches\content.dat`,
+	} {
+		if !e.exists(kept) {
+			t.Errorf("opt-in target cleaned by default: %s", kept)
+		}
+	}
+	// Chrome cache (default-on) is gone; profile data is kept.
+	if e.exists(`C\Users\sandbox\AppData\Local\Google\Chrome\User Data\Default\Cache\Cache_Data\data_1`) {
+		t.Error("Chrome cache not cleaned")
+	}
+	if !e.exists(`C\Users\sandbox\AppData\Local\Google\Chrome\User Data\Default\Login Data`) {
+		t.Error("Chrome Login Data removed")
+	}
+
+	out, _, code := e.run("clean", "--rule", "windows.recycle-bin", "--yes", "--json")
+	if code != 0 {
+		t.Fatalf("recycle bin: code = %d", code)
+	}
+	r := decode[cleanResult](t, out)
+	if r.Summary.Removed != 3 || r.Summary.ReclaimedBytes != 2006100 {
+		t.Errorf("recycle bin summary = %+v", r.Summary)
+	}
+	if e.exists(`C\$Recycle.Bin\S-1-5-21-sandbox\$RDEF456\old-photo.jpg`) {
+		t.Error("Recycle Bin not emptied")
 	}
 }
 

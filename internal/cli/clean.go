@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,7 +13,9 @@ import (
 
 	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 	"github.com/Harshul1484/out-of-windows/internal/cleanup"
+	"github.com/Harshul1484/out-of-windows/internal/elevation"
 	"github.com/Harshul1484/out-of-windows/internal/history"
+	"github.com/Harshul1484/out-of-windows/internal/sandbox"
 	"github.com/Harshul1484/out-of-windows/internal/system"
 	"github.com/Harshul1484/out-of-windows/internal/ui"
 )
@@ -23,6 +27,7 @@ type cleanOptions struct {
 	details   bool
 	list      bool
 	whitelist bool
+	pause     bool // keep an elevated window open at the end
 	rules     []string
 }
 
@@ -41,7 +46,15 @@ func newCleanCmd(app *App) *cobra.Command {
 			"  " + buildinfo.Name + " clean --dry-run --json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runClean(cmd.Context(), app, o)
+			err := runClean(cmd.Context(), app, o)
+			if o.pause {
+				if err != nil {
+					fmt.Fprintf(app.Err, "%s %v\n", ui.Err.Render("error:"), err)
+				}
+				fmt.Fprint(app.Out, "\n Press Enter to close this window.")
+				_, _ = bufio.NewReader(app.In).ReadString('\n')
+			}
+			return err
 		},
 	}
 	f := cmd.Flags()
@@ -52,6 +65,8 @@ func newCleanCmd(app *App) *cobra.Command {
 	f.BoolVar(&o.list, "list", false, "list cleanup targets with explanations and exit")
 	f.BoolVar(&o.whitelist, "whitelist", false, "choose cleanup targets to protect (never clean)")
 	f.StringSliceVar(&o.rules, "rule", nil, "only these targets (IDs or prefixes, e.g. temp.user or browser)")
+	f.BoolVar(&o.pause, "pause", false, "wait for Enter before exiting (used for elevated windows)")
+	_ = f.MarkHidden("pause")
 	return cmd
 }
 
@@ -114,6 +129,9 @@ func runClean(ctx context.Context, app *App, o cleanOptions) error {
 			return app.printJSON(cleanReport(app, res, selected, nil, false, o.details))
 		}
 		app.printf("\n %s %s\n\n", ui.OK.Render(ui.SymOK), "Nothing to clean.")
+		if !o.yes {
+			offerElevation(ctx, app, res)
+		}
 		return nil
 	}
 
@@ -139,7 +157,7 @@ func runClean(ctx context.Context, app *App, o cleanOptions) error {
 	for _, rs := range res.Rules {
 		if selected[rs.Rule.ID] && rs.Status == cleanup.StatusReady {
 			chosen = append(chosen, rs)
-			files += len(rs.Files)
+			files += rs.ItemCount()
 			bytes += rs.Bytes
 		}
 	}
@@ -155,12 +173,19 @@ func runClean(ctx context.Context, app *App, o cleanOptions) error {
 	if !o.yes {
 		app.println()
 		app.printf(" You are about to permanently delete %s %s from %s:\n",
-			ui.Bold.Render(ui.Plural(files, "file", "files")), ui.Bold.Render("("+ui.Bytes(bytes)+")"),
+			ui.Bold.Render(ui.Plural(files, "item", "items")), ui.Bold.Render("("+ui.Bytes(bytes)+")"),
 			ui.Plural(len(chosen), "cleanup target", "cleanup targets"))
 		for _, rs := range chosen {
 			app.printf("   %s %s %s\n", ui.Accent.Render(ui.SymItem), rs.Rule.Name, ui.Muted.Render(ui.Bytes(rs.Bytes)))
 		}
-		app.printf(" %s\n\n", ui.Muted.Render("These are temporary files and caches that programs recreate. They are deleted,\n not moved to the Recycle Bin. Files that change or are in use are kept."))
+		app.printf(" %s\n", ui.Muted.Render("These are temporary files and caches that programs recreate. They are deleted,\n not moved to the Recycle Bin. Files that change or are in use are kept."))
+		for _, rs := range chosen {
+			if rs.Rule.Special == cleanup.SpecialRecycleBin {
+				app.printf(" %s %s\n", ui.Warn.Render(ui.SymWarn+" Recycle Bin:"),
+					ui.Plural(rs.ItemCount(), "item", "items")+" you deleted earlier will be gone for good and cannot be restored.")
+			}
+		}
+		app.println()
 		ok, err := confirmCtx(ctx, app, " Continue?")
 		if err != nil {
 			return err
@@ -192,7 +217,45 @@ func runClean(ctx context.Context, app *App, o cleanOptions) error {
 	if out.Cancelled {
 		return errCancelled
 	}
+	if !o.yes {
+		offerElevation(ctx, app, res)
+	}
 	return nil
+}
+
+// offerElevation lets an interactive, non-elevated user clean the targets
+// that were skipped only for lack of administrator rights, in a separate
+// elevated window that runs its own scan, checklist and confirmation.
+func offerElevation(ctx context.Context, app *App, res *cleanup.ScanResult) {
+	if !app.interactive() || app.Elevated || app.Sandbox != "" {
+		return
+	}
+	var ids, names []string
+	for _, rs := range res.Rules {
+		if rs.NeedsAdmin {
+			ids = append(ids, rs.Rule.ID)
+			names = append(names, rs.Rule.Name)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	app.printf(" %s %s need administrator rights: %s\n", ui.Warn.Render(ui.SymWarn),
+		ui.Plural(len(ids), "target", "targets"), strings.Join(names, ", "))
+	ok, err := confirmCtx(ctx, app, " Scan and clean them in an elevated window? You will see a Windows permission prompt.")
+	if err != nil || !ok {
+		return
+	}
+	code, err := elevation.Relaunch([]string{"clean", "--rule", strings.Join(ids, ","), "--pause"})
+	switch {
+	case errors.Is(err, elevation.ErrDeclined):
+		app.printf(" %s\n\n", ui.Muted.Render("Administrator permission was not granted. Nothing else was changed."))
+	case err != nil:
+		app.printf(" %s could not start an elevated window: %v\n\n", ui.Err.Render(ui.SymErr), err)
+	default:
+		app.printf(" %s Elevated cleanup finished (exit code %d). See `%s history` for what it removed.\n\n",
+			ui.OK.Render(ui.SymOK), code, buildinfo.Name)
+	}
 }
 
 func (a *App) cleanupEnv() *cleanup.Env {
@@ -211,6 +274,11 @@ func (a *App) cleanupEnv() *cleanup.Env {
 	}
 	if a.Sandbox == "" {
 		env.Running = system.RunningNames
+		env.Specials = map[string]cleanup.Special{cleanup.SpecialRecycleBin: system.RecycleBin{}}
+	} else {
+		env.Specials = map[string]cleanup.Special{
+			cleanup.SpecialRecycleBin: sandbox.RecycleBin{Dir: sandbox.RecycleBinDir(a.Sandbox)},
+		}
 	}
 	return env
 }
@@ -256,7 +324,7 @@ func chooseRules(res *cleanup.ScanResult, preselected map[string]bool) (map[stri
 		for _, rs := range ready {
 			items = append(items, ui.CheckItem{
 				Label:   rs.Rule.Name,
-				Right:   ui.PadLeft(ui.Bytes(rs.Bytes), 9) + ui.Muted.Render("  "+ui.Plural(len(rs.Files), "file", "files")),
+				Right:   ui.PadLeft(ui.Bytes(rs.Bytes), 9) + ui.Muted.Render("  "+ui.Plural(rs.ItemCount(), "item", "items")),
 				Checked: preselected[rs.Rule.ID],
 				Weight:  rs.Bytes,
 				Detail: []string{
@@ -289,11 +357,27 @@ func groupByCategory(scans []*cleanup.RuleScan) map[cleanup.Category][]*cleanup.
 
 func printScan(app *App, res *cleanup.ScanResult, selected map[string]bool, details bool) {
 	width := min(ui.Width(), 100)
-	nameW := 30
+	// Targets with nothing to clean (including software that is not
+	// installed) are summarised in one line unless --details is set.
+	shown := func(rs *cleanup.RuleScan) bool { return details || rs.Status != cleanup.StatusEmpty }
+	nameW, hidden := 24, 0
+	for _, rs := range res.Rules {
+		if shown(rs) {
+			nameW = max(nameW, len([]rune(rs.Rule.Name)))
+		} else {
+			hidden++
+		}
+	}
+	nameW = min(nameW, 40)
 	byCat := groupByCategory(res.Rules)
 	var recent, skipped int
 	for _, c := range cleanup.CategoryOrder {
-		list := byCat[c]
+		var list []*cleanup.RuleScan
+		for _, rs := range byCat[c] {
+			if shown(rs) {
+				list = append(list, rs)
+			}
+		}
 		if len(list) == 0 {
 			continue
 		}
@@ -307,7 +391,7 @@ func printScan(app *App, res *cleanup.ScanResult, selected map[string]bool, deta
 					mark = ui.Muted.Render(ui.SymSkip)
 				}
 				app.printf("   %s %s %s  %s\n", mark, name, ui.PadLeft(ui.Bold.Render(ui.Bytes(rs.Bytes)), 9),
-					ui.Muted.Render(ui.Plural(len(rs.Files), "file", "files")))
+					ui.Muted.Render(ui.Plural(rs.ItemCount(), "item", "items")))
 			case cleanup.StatusEmpty:
 				app.printf("   %s %s %s\n", ui.OK.Render(ui.SymOK), ui.Muted.Render(name), ui.Muted.Render("nothing to clean"))
 			case cleanup.StatusReview:
@@ -335,27 +419,36 @@ func printScan(app *App, res *cleanup.ScanResult, selected map[string]bool, deta
 		}
 		app.println()
 	}
+	if hidden > 0 {
+		app.printf(" %s %s\n\n", ui.OK.Render(ui.SymOK), ui.Muted.Render(fmt.Sprintf(
+			"%s nothing to clean or not installed (--details lists them)", ui.Plural(hidden, "other target has", "other targets have"))))
+	}
 
 	var selBytes int64
 	var selFiles int
 	for _, rs := range res.Rules {
 		if selected[rs.Rule.ID] && rs.Status == cleanup.StatusReady {
 			selBytes += rs.Bytes
-			selFiles += len(rs.Files)
+			selFiles += rs.ItemCount()
 		}
 	}
 	app.printf(" %s\n", ui.Divider(width-2))
 	app.printf(" %s  %s %s\n", ui.PadRight("Reclaimable", 12), ui.Title.Render(ui.Bytes(res.Bytes())),
-		ui.Muted.Render("in "+ui.Plural(res.Files(), "file", "files")))
+		ui.Muted.Render("in "+ui.Plural(res.Files(), "item", "items")))
 	if selBytes != res.Bytes() {
 		app.printf(" %s  %s %s\n", ui.PadRight("Selected", 12), ui.Bold.Render(ui.Bytes(selBytes)),
-			ui.Muted.Render("in "+ui.Plural(selFiles, "file", "files")+"  ("+ui.SymSkip+" = not selected by default)"))
+			ui.Muted.Render("in "+ui.Plural(selFiles, "item", "items")+"  ("+ui.SymSkip+" = not selected by default)"))
 	}
 	app.printf(" %s\n", ui.Muted.Render("Scanned in "+ui.Duration(res.Duration)))
 }
 
 func printOutcome(app *App, out *cleanup.Outcome) {
 	width := min(ui.Width(), 100)
+	nameW := 24
+	for _, ro := range out.Rules {
+		nameW = max(nameW, len([]rune(ro.Rule.Name)))
+	}
+	nameW = min(nameW, 40)
 	app.println()
 	for _, ro := range out.Rules {
 		mark := ui.OK.Render(ui.SymOK)
@@ -364,8 +457,8 @@ func printOutcome(app *App, out *cleanup.Outcome) {
 		} else if ro.Removed == 0 {
 			mark = ui.Muted.Render(ui.SymSkip)
 		}
-		app.printf("   %s %s %s  %s\n", mark, ui.PadRight(ro.Rule.Name, 30), ui.PadLeft(ui.Bold.Render(ui.Bytes(ro.Reclaimed)), 9),
-			ui.Muted.Render(ui.Plural(ro.Removed, "file", "files")+" removed"))
+		app.printf("   %s %s %s  %s\n", mark, ui.PadRight(ro.Rule.Name, nameW), ui.PadLeft(ui.Bold.Render(ui.Bytes(ro.Reclaimed)), 9),
+			ui.Muted.Render(ui.Plural(ro.Removed, "item", "items")+" removed"))
 		if n := ro.Skipped.Total(); n > 0 {
 			app.printf("       %s\n", ui.Muted.Render(ui.SymSkip+" "+skippedLine(&ro.Skipped)))
 		}
@@ -381,7 +474,7 @@ func printOutcome(app *App, out *cleanup.Outcome) {
 		files += ro.Removed
 		dirs += ro.DirsRemoved
 	}
-	removed := ui.Plural(files, "file", "files")
+	removed := ui.Plural(files, "item", "items")
 	if dirs > 0 {
 		removed += ", " + ui.Plural(dirs, "empty folder", "empty folders")
 	}

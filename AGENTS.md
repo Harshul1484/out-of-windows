@@ -91,8 +91,11 @@ arrives.
   One file per command (`clean.go`, `config_cmd.go`, `history_cmd.go`, ...); `json.go` holds
   the JSON schema types; `root.go` registers commands and the planned-command stubs.
 - `internal/cleanup/`: the cleanup engine. `rule.go` (Rule schema, validation), `rules.go`
-  (built-in rule registry), `scan.go` (read-only scan), `execute.go` (verified execution,
-  skip reasons, outcome accounting).
+  (registry and shared explanations), `rules_<category>.go` (one file per category: temp,
+  windows, browsers, apps, dev, logs), `scan.go` (read-only scan, `{profile}` expansion,
+  specials), `execute.go` (verified execution, skip reasons, outcome accounting).
+- `internal/elevation/`: relaunches one command elevated through the UAC prompt
+  (`ShellExecuteExW` `runas`) and waits for it. Never used silently.
 - `internal/safety/`: Win32 path normalization (`path.go`), discovered locations
   (`locations.go`, `locations_windows.go`), and the `Guard` (`guard.go`): protected,
   system, user-content, sensitive and whitelisted locations, exemptions, root validation.
@@ -102,7 +105,8 @@ arrives.
 - `internal/config/`: `config.json` schema, load/validate/save (atomic), whitelist editing.
 - `internal/history/`: append-only `history.jsonl` operation log.
 - `internal/logging/`: slog setup; logs never go to stdout.
-- `internal/system/`: Windows version, elevation, CPU, memory, disk, processes (read-only).
+- `internal/system/`: Windows version, elevation, CPU, memory, disk, processes (read-only),
+  and the Recycle Bin special (Shell API).
 - `internal/ui/`: styles, formatting, prompts, spinner, Bubble Tea checklist and home screen.
 - `internal/sandbox/`: simulated Windows layout and seed data for safe end-to-end runs.
 - `internal/testutil/`: test sandbox, deletion fence setup, fixtures, file locking.

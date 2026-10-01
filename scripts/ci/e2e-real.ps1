@@ -54,6 +54,28 @@ foreach ($j in $junk) { New-File $j 4096; Set-Old $j }
 Set-Old (Join-Path $junkDir 'nested')
 Set-Old $junkDir
 
+# A Chrome profile: its cache must go, its credentials and data must stay.
+$chromeProfile = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data\OOW CI'
+New-File (Join-Path $chromeProfile 'Preferences') 200
+$junk += (Join-Path $chromeProfile 'Cache\Cache_Data\f_0ci001')
+New-File $junk[-1] 300000
+foreach ($name in 'Login Data', 'Cookies', 'Bookmarks') {
+  $c = Join-Path $chromeProfile $name
+  New-File $c 2000
+  $canaries += $c
+}
+# A folder with a Cache but no Preferences file is not a profile.
+$notProfile = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data\OOW CI not a profile\Cache\keep.bin'
+New-File $notProfile 100
+$canaries += $notProfile
+
+# npm download cache (default-on) next to npx installs (never touched).
+$junk += (Join-Path $env:LOCALAPPDATA 'npm-cache\_cacache\oow-ci\entry')
+New-File $junk[-1] 50000
+$npx = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx\oow-ci\package.json'
+New-File $npx 100
+$canaries += $npx
+
 # Recent temp file: must be kept (younger than 24 hours).
 $recent = Join-Path $userTemp 'oow-ci-recent.tmp'
 New-File $recent
@@ -101,6 +123,21 @@ foreach ($j in $junk) { if (Test-Path -LiteralPath $j) { throw "junk not removed
 if (Test-Path -LiteralPath $junkDir) { throw "emptied old folder not removed: $junkDir" }
 if ($res.summary.errors -ne 0) { throw "cleanup reported $($res.summary.errors) unexpected errors" }
 if (-not $res.summary.executed -or $res.summary.removed -lt $junk.Count) { throw 'cleanup did not run' }
+
+Write-Host '::group::Recycle Bin (opt-in, Shell API)'
+$recycled = Join-Path $env:TEMP 'oow-ci-recycled.txt'
+New-File $recycled 12345
+Add-Type -AssemblyName Microsoft.VisualBasic
+[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($recycled, 'OnlyErrorDialogs', 'SendToRecycleBin')
+$before = & $Oow clean --rule windows.recycle-bin --dry-run --json | ConvertFrom-Json
+if ($before.rules[0].status -ne 'ready' -or $before.rules[0].files -lt 1) { throw "Recycle Bin not detected: $($before.rules[0] | ConvertTo-Json -Compress)" }
+$rb = & $Oow clean --rule windows.recycle-bin --yes --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $rb.summary.removed -lt 1 -or $rb.summary.errors -ne 0) { throw "Recycle Bin not emptied: $($rb.summary | ConvertTo-Json -Compress)" }
+$after = & $Oow clean --rule windows.recycle-bin --dry-run --json | ConvertFrom-Json
+if ($after.rules[0].status -ne 'empty') { throw "Recycle Bin still has items: $($after.rules[0] | ConvertTo-Json -Compress)" }
+Assert-Canaries
+Write-Host "Recycle Bin emptied: $($rb.summary.removed) item(s), $($rb.summary.reclaimed_bytes) bytes."
+Write-Host '::endgroup::'
 
 Write-Host '::group::history'
 & $Oow history

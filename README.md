@@ -38,7 +38,7 @@ say so and exit with code 3.
 | Command | What it does | Status |
 |---|---|---|
 | `oow` | Interactive home screen with live CPU, memory and disk | ✅ |
-| `oow clean` | Temp files, caches and logs that are safe to delete | ✅ initial targets |
+| `oow clean` | Temp files, browser/app/developer caches, logs, Recycle Bin | ✅ |
 | `oow config` | Settings, whitelist, list of protected locations | ✅ |
 | `oow history` | What previous runs removed | ✅ |
 | `oow uninstall` / `leftovers` | Complete uninstall + orphaned app data | Phase 3 |
@@ -80,17 +80,21 @@ oow history              # what was removed and when
 Global flags: `--json` (stable machine output, see [docs/JSON.md](docs/JSON.md)),
 `--no-color` (or set `NO_COLOR`), `--debug` (debug log to stderr).
 
-### What `oow clean` removes today
+### What `oow clean` removes
 
-| Target | Location | Rule |
+Run `oow clean --list` for every target with its what / why-safe / afterwards explanation.
+
+| Category | Targets | Notes |
 |---|---|---|
-| User temporary files | `%LOCALAPPDATA%\Temp` | created *and* modified > 24 h ago, not in use |
-| Windows temporary files | `%WINDIR%\Temp` | same; needs an elevated terminal |
-| DirectX shader cache | `%LOCALAPPDATA%\D3DSCache` | rebuilt automatically |
-| Windows error reports | `%LOCALAPPDATA%\Microsoft\Windows\WER\Report{Archive,Queue}` | diagnostic copies |
+| Temporary files | user Temp, Windows Temp | created *and* modified > 24 h ago, not in use; Windows Temp needs admin |
+| Windows caches | DirectX, NVIDIA, AMD and Intel shader caches; Temporary Internet Files; thumbnail cache (opt-in); Recycle Bin (opt-in) | Outlook attachment cache excluded; Recycle Bin emptied via the Shell |
+| Browser caches | Chrome (+Beta/Canary), Chromium, Edge, Brave, Vivaldi, Opera, Firefox | HTTP/code/GPU caches of real profiles only; never cookies, passwords, history, bookmarks, extensions or site storage; skipped while the browser runs |
+| Application caches | Discord, Slack, Teams (new and classic), VS Code, Cursor, Spotify, Steam, Epic, Battle.net, Adobe Camera Raw; JetBrains caches and Adobe media cache (opt-in) | cache folders only; skipped while the app runs |
+| Developer caches | npm, Yarn, pip, NuGet HTTP, Go build, Cargo archives, Electron, node-gyp, Composer, TypeScript, golangci-lint; Gradle (opt-in) | stores projects use directly (`.m2`, `.nuget\packages`, pnpm, Pub, Cargo sources) are never touched |
+| Logs and crash reports | Windows error reports (user and system), app crash dumps (opt-in), kernel minidumps (opt-in, admin) | |
 
-Browser, application, Windows Update, Delivery Optimization, thumbnail caches, Recycle Bin
-and uninstalled-app leftovers arrive in Phases 2–3.
+Opt-in targets are listed but unselected by default. Admin-only targets are skipped unless
+you run elevated; interactively, `oow clean` offers to clean them in an elevated window.
 
 ## How it keeps your data safe
 

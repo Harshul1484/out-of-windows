@@ -95,7 +95,7 @@ func TestBuiltinRootsAreValidInSimulatedLayout(t *testing.T) {
 	w := newWorld(t)
 	for _, r := range cleanup.BuiltinRules() {
 		for _, tmpl := range r.Roots {
-			p, err := w.locs.Expand(tmpl)
+			p, err := w.locs.Expand(strings.ReplaceAll(tmpl, "{profile}", "Default"))
 			if err != nil {
 				t.Errorf("%s: %v", r.ID, err)
 				continue

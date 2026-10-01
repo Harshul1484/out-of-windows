@@ -131,6 +131,7 @@ func Seed(root string) error {
 		{filepath.Join(local, "Microsoft", "Windows", "WER", "ReportQueue",
 			"AppHang_contoso.exe_2", "memory.hdmp"), 2500000, 8 * day},
 	}
+	files = append(files, phase2Files(l, rel)...)
 
 	for _, d := range []string{
 		l.UserContent[0], l.UserContent[2], l.UserContent[3], l.UserContent[4],
@@ -159,15 +160,104 @@ func Seed(root string) error {
 		}
 	}
 
-	// A junction inside Temp that points at Documents. Cleanup must never
-	// follow it: deleting through it would destroy user files.
-	link := filepath.Join(l.Temp, "link-to-documents")
-	if _, err := os.Lstat(link); os.IsNotExist(err) {
-		if err := MakeJunction(link, l.UserContent[1]); err != nil {
-			return fmt.Errorf("create junction: %w", err)
+	// Junctions that cleanup must never follow: one inside Temp, and a fake
+	// browser "profile" that points at Documents.
+	for link, target := range map[string]string{
+		filepath.Join(l.Temp, "link-to-documents"):                                  l.UserContent[1],
+		filepath.Join(l.LocalAppData, "Google", "Chrome", "User Data", "Profile 9"): l.UserContent[1],
+	} {
+		if _, err := os.Lstat(link); os.IsNotExist(err) {
+			if err := MakeJunction(link, target); err != nil {
+				return fmt.Errorf("create junction: %w", err)
+			}
 		}
 	}
 	return nil
+}
+
+// RecycleBinDir is the simulated Recycle Bin of the sandbox's C: drive.
+func RecycleBinDir(root string) string { return filepath.Join(root, "C", "$Recycle.Bin") }
+
+// phase2Files seeds browser, application and developer caches together with
+// the precious data that lives right next to them.
+func phase2Files(l safety.Locations, rel func(string) string) []File {
+	const day = 24 * time.Hour
+	local, roaming, prof := rel(l.LocalAppData), rel(l.RoamingAppData), rel(l.UserProfile)
+	chrome := filepath.Join(local, "Google", "Chrome", "User Data")
+	ff := filepath.Join("Mozilla", "Firefox", "Profiles", "k3x9.default-release")
+	j := filepath.Join
+	return []File{
+		// Chrome: two real profiles (marker "Preferences"), browser-wide shader
+		// cache, and profile data that must survive.
+		{j(chrome, "Default", "Preferences"), 2000, 30 * day},
+		{j(chrome, "Default", "Cache", "Cache_Data", "data_1"), 270000, 3 * day},
+		{j(chrome, "Default", "Cache", "Cache_Data", "f_00a1b2"), 900000, 3 * day},
+		{j(chrome, "Default", "Code Cache", "js", "4f1e2d_0"), 64000, 3 * day},
+		{j(chrome, "Default", "GPUCache", "data_0"), 8192, 3 * day},
+		{j(chrome, "Profile 1", "Preferences"), 2000, 30 * day},
+		{j(chrome, "Profile 1", "Cache", "Cache_Data", "f_000001"), 400000, 9 * day},
+		{j(chrome, "ShaderCache", "data_0"), 120000, 9 * day},
+		{j(chrome, "GrShaderCache", "data_1"), 60000, 9 * day},
+		{j(chrome, "Local State"), 5000, 30 * day},
+		{j(chrome, "Default", "Cookies"), 40000, 1 * day},
+		{j(chrome, "Default", "Login Data"), 50000, 1 * day},
+		{j(chrome, "Default", "History"), 300000, 1 * day},
+		{j(chrome, "Default", "Bookmarks"), 9000, 60 * day},
+		{j(chrome, "Default", "Local Storage", "leveldb", "000003.log"), 7000, 2 * day},
+		{j(chrome, "Default", "Service Worker", "CacheStorage", "a1", "index"), 3000, 2 * day},
+		{j(chrome, "Default", "Extensions", "abcdef", "1.0", "manifest.json"), 900, 90 * day},
+		// A folder with a Cache but no Preferences is not a profile.
+		{j(chrome, "Crashpad", "Cache", "notaprofile.bin"), 1000, 30 * day},
+
+		// Firefox: cache in the local profile, credentials in the roaming one.
+		{j(local, ff, "cache2", "entries", "0A1B2C3D"), 350000, 5 * day},
+		{j(local, ff, "startupCache", "startupCache.8.little"), 40000, 5 * day},
+		{j(roaming, ff, "logins.json"), 3000, 10 * day},
+		{j(roaming, ff, "key4.db"), 300000, 10 * day},
+		{j(roaming, ff, "places.sqlite"), 5000000, 1 * day},
+
+		// Discord (Electron): caches vs local storage and settings.
+		{j(roaming, "discord", "Cache", "Cache_Data", "f_000042"), 2200000, 4 * day},
+		{j(roaming, "discord", "Code Cache", "js", "index"), 24000, 4 * day},
+		{j(roaming, "discord", "Local Storage", "leveldb", "000005.ldb"), 11000, 4 * day},
+		{j(roaming, "discord", "settings.json"), 400, 4 * day},
+
+		// VS Code: caches vs user settings and workspace state.
+		{j(roaming, "Code", "Cache", "Cache_Data", "f_00000a"), 500000, 6 * day},
+		{j(roaming, "Code", "CachedData", "a1b2c3", "chrome", "js", "x.code"), 800000, 6 * day},
+		{j(roaming, "Code", "CachedExtensionVSIXs", "ms-python.python-2025.1.0"), 15000000, 20 * day},
+		{j(roaming, "Code", "User", "settings.json"), 2500, 3 * day},
+		{j(roaming, "Code", "User", "workspaceStorage", "9f8e", "state.vscdb"), 70000, 3 * day},
+
+		// JetBrains: caches/index (opt-in) vs local history; Toolbox excluded.
+		{j(local, "JetBrains", "IntelliJIdea2025.2", "caches", "content.dat"), 3000000, 2 * day},
+		{j(local, "JetBrains", "IntelliJIdea2025.2", "index", "stubs", "stubs.dat"), 2000000, 2 * day},
+		{j(local, "JetBrains", "IntelliJIdea2025.2", "LocalHistory", "changes.storageData"), 400000, 2 * day},
+		{j(local, "JetBrains", "Toolbox", "caches", "toolbox.cache"), 1000, 2 * day},
+
+		// npm: cache and logs vs npx installs.
+		{j(local, "npm-cache", "_cacache", "content-v2", "sha512", "ab", "cd", "ef01"), 1200000, 12 * day},
+		{j(local, "npm-cache", "_logs", "2026-09-01T10_00_00_000Z-debug-0.log"), 30000, 30 * day},
+		{j(local, "npm-cache", "_npx", "8e1f", "package.json"), 500, 12 * day},
+
+		// Go build cache vs module cache.
+		{j(local, "go-build", "3f", "3fa1b2-d"), 700000, 3 * day},
+		{j(prof, "go", "pkg", "mod", "golang.org", "x", "sys@v0.48.0", "go.mod"), 300, 30 * day},
+
+		// Cargo: archives vs extracted sources and installed binaries.
+		{j(prof, ".cargo", "registry", "cache", "index.crates.io-6f17", "serde-1.0.200.crate"), 77000, 40 * day},
+		{j(prof, ".cargo", "registry", "src", "index.crates.io-6f17", "serde-1.0.200", "Cargo.toml"), 3000, 40 * day},
+		{j(prof, ".cargo", "bin", "cargo.exe"), 9000, 40 * day},
+
+		// Windows: Outlook attachment cache is excluded from INetCache.
+		{j(local, "Microsoft", "Windows", "INetCache", "IE", "X1Y2Z3", "logo[1].png"), 30000, 10 * day},
+		{j(local, "Microsoft", "Windows", "INetCache", "Content.Outlook", "QWER1234", "contract-edited.docx"), 80000, 10 * day},
+
+		// Simulated Recycle Bin.
+		{j("C", "$Recycle.Bin", "S-1-5-21-sandbox", "$RABC123.txt"), 6000, 2 * day},
+		{j("C", "$Recycle.Bin", "S-1-5-21-sandbox", "$IABC123.txt"), 100, 2 * day},
+		{j("C", "$Recycle.Bin", "S-1-5-21-sandbox", "$RDEF456", "old-photo.jpg"), 2000000, 2 * day},
+	}
 }
 
 // WriteFile creates a file of the given size with creation and modification

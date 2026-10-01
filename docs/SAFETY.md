@@ -77,7 +77,12 @@ These come from discovery **plus a hard-coded baseline** (`C:\Windows`, `C:\Prog
 on discovery succeeding.
 
 - **Exemptions** are the only way a rule may work inside a system tree. They live in the
-  guard, not in rules, and currently contain only `%WINDIR%\Temp`.
+  guard, not in rules, and currently contain `%WINDIR%\Temp`,
+  `%ProgramData%\Microsoft\Windows\WER\ReportArchive` and `ReportQueue`, and
+  `%WINDIR%\Minidump`: all admin-only and all also cleaned by Windows Disk Cleanup.
+- **Profile roots** (`{profile}` in a rule root) expand only to real, non-link directories
+  containing the rule's marker file, so a browser's `User Data\<profile>\Cache` is reachable
+  but a stray folder or a junction named like a profile is not.
 - **Scope**: rule-driven cleanup *must* carry the validated root as scope; any path not
   strictly inside it is refused. A cleanup request without a scope is refused.
 - **ValidateRoot** additionally refuses any root that *contains* a protected location, that

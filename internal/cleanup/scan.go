@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -31,7 +33,23 @@ type Env struct {
 	Running func() map[string]bool
 	// Remove deletes one verified item. Defaults to filesystem.RemoveVerified.
 	Remove func(path string, fp filesystem.Fingerprint, check filesystem.CheckFunc) error
+	// Specials implement non-file targets by Rule.Special name.
+	Specials map[string]Special
 }
+
+// Special is a cleanup target that is not a set of files under a root, such
+// as the Recycle Bin, which must be emptied through the Shell API.
+type Special interface {
+	// Measure reports what Clean would remove. It must not modify anything.
+	Measure(ctx context.Context) (items int, bytes int64, err error)
+	// Clean removes the target's contents and reports what was removed.
+	Clean(ctx context.Context) (items int, bytes int64, err error)
+}
+
+// Special target names.
+const (
+	SpecialRecycleBin = "recycle-bin"
+)
 
 func (e *Env) now() time.Time {
 	if e.Now != nil {
@@ -72,8 +90,16 @@ type RuleScan struct {
 	KeptRecent      int
 	KeptRecentBytes int64
 
+	// NeedsAdmin is set when the rule was skipped only for lack of elevation.
+	NeedsAdmin bool
+	// SpecialItems counts items of a Special target (which has no Files).
+	SpecialItems int
+
 	Skipped Tally
 }
+
+// ItemCount is the number of items the rule would remove.
+func (rs *RuleScan) ItemCount() int { return len(rs.Files) + rs.SpecialItems }
 
 // ScanResult aggregates all rules.
 type ScanResult struct {
@@ -93,12 +119,12 @@ func (s *ScanResult) Bytes() int64 {
 	return n
 }
 
-// Files is the total number of files across ready rules.
+// Files is the total number of items across ready rules.
 func (s *ScanResult) Files() int {
 	n := 0
 	for _, r := range s.Rules {
 		if r.Status == StatusReady {
-			n += len(r.Files)
+			n += r.ItemCount()
 		}
 	}
 	return n
@@ -172,6 +198,7 @@ func scanRule(ctx context.Context, env *Env, r *Rule, running map[string]bool, p
 		return skip(StatusSkipped, "disabled in your whitelist")
 	}
 	if r.RequiresAdmin && !env.Elevated {
+		rs.NeedsAdmin = true
 		return skip(StatusSkipped, "requires administrator: run %s from an elevated terminal", buildinfo.Name)
 	}
 	if len(r.DetectPaths) > 0 && !anyExists(env, r.DetectPaths) {
@@ -179,29 +206,42 @@ func scanRule(ctx context.Context, env *Env, r *Rule, running map[string]bool, p
 	}
 	for _, exe := range r.AppProcesses {
 		if running[strings.ToLower(exe)] {
-			return skip(StatusSkipped, "%s is running; close it to clean its cache", exe)
+			app := r.App
+			if app == "" {
+				app = exe
+			}
+			return skip(StatusSkipped, "%s is running; close it (including in the background) to clean this", app)
 		}
 	}
 
 	prog.setCurrent(r.Name)
+	if r.Special != "" {
+		return scanSpecial(ctx, env, rs)
+	}
 	cutoff := env.now().Add(-r.MinAge)
 	for _, tmpl := range r.Roots {
-		root, status, reason := resolveRoot(env, tmpl)
-		if status == StatusEmpty {
-			continue
+		paths, err := expandRoot(env, r, tmpl)
+		if err != nil {
+			return skip(StatusSkipped, "%v", err)
 		}
-		if status != "" {
-			return skip(status, "%s", reason)
-		}
-		rs.Roots = append(rs.Roots, root)
-		if err := scanRoot(ctx, env, r, rs, root, cutoff, prog); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return skip(StatusSkipped, "scan cancelled")
-			}
-			if errors.Is(err, filesystem.ErrGone) {
+		for _, p := range paths {
+			root, status, reason := resolveRoot(env, p)
+			if status == StatusEmpty {
 				continue
 			}
-			return skip(StatusReview, "could not scan %s: %v", root, err)
+			if status != "" {
+				return skip(status, "%s", reason)
+			}
+			rs.Roots = append(rs.Roots, root)
+			if err := scanRoot(ctx, env, r, rs, root, cutoff, prog); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return skip(StatusSkipped, "scan cancelled")
+				}
+				if errors.Is(err, filesystem.ErrGone) {
+					continue
+				}
+				return skip(StatusReview, "could not scan %s: %v", root, err)
+			}
 		}
 	}
 	if len(rs.Files) == 0 {
@@ -217,14 +257,70 @@ func scanRule(ctx context.Context, env *Env, r *Rule, running map[string]bool, p
 	return rs
 }
 
-// resolveRoot expands a template and proves the location is safe to clean.
-// It returns StatusEmpty when the location does not exist, another status
-// with a reason when it must not be cleaned, or "" with the validated root.
-func resolveRoot(env *Env, tmpl string) (string, Status, string) {
-	p, err := env.Locations.Expand(tmpl)
-	if err != nil {
-		return "", StatusSkipped, err.Error()
+func scanSpecial(ctx context.Context, env *Env, rs *RuleScan) *RuleScan {
+	sp := env.Specials[rs.Rule.Special]
+	if sp == nil {
+		rs.Status, rs.Reason = StatusSkipped, "not available on this system"
+		return rs
 	}
+	items, bytes, err := sp.Measure(ctx)
+	switch {
+	case err != nil:
+		rs.Status, rs.Reason = StatusSkipped, "could not measure: "+err.Error()
+	case items == 0:
+		rs.Status = StatusEmpty
+	default:
+		rs.Status, rs.SpecialItems, rs.Bytes = StatusReady, items, bytes
+	}
+	return rs
+}
+
+// expandRoot turns a root template into concrete, normalized paths. Without
+// `{profile}` that is exactly one path. With it, one path per real profile
+// directory: a non-link directory containing the rule's ProfileMarker.
+func expandRoot(env *Env, r *Rule, tmpl string) ([]string, error) {
+	i := strings.Index(tmpl, `\`+profileToken+`\`)
+	if i < 0 {
+		p, err := env.Locations.Expand(tmpl)
+		if err != nil {
+			return nil, err
+		}
+		return []string{p}, nil
+	}
+	base, err := env.Locations.Expand(tmpl[:i])
+	if err != nil {
+		return nil, err
+	}
+	suffix := tmpl[i+len(profileToken)+1:]
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil, nil // no profiles (or unreadable): nothing to clean here
+	}
+	var out []string
+	for _, de := range entries {
+		if !de.IsDir() || matchAny(r.ProfileExclude, de.Name()) {
+			continue
+		}
+		dir := filepath.Join(base, de.Name())
+		if e, err := filesystem.Lstat(dir); err != nil || e.Reparse {
+			continue
+		}
+		if _, err := filesystem.Lstat(filepath.Join(dir, r.ProfileMarker)); err != nil {
+			continue
+		}
+		p, err := safety.Normalize(dir + suffix)
+		if err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// resolveRoot proves a concrete root location is safe to clean. It returns
+// StatusEmpty when the location does not exist, another status with a reason
+// when it must not be cleaned, or "" with the validated root.
+func resolveRoot(env *Env, p string) (string, Status, string) {
 	e, err := filesystem.Lstat(p)
 	switch {
 	case errors.Is(err, filesystem.ErrGone):

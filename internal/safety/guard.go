@@ -188,18 +188,24 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 		g.critical = appendLoc(g.critical, p, "user files folder", false)
 	}
 
-	// Narrow, individually reviewed system subtrees that cleanup rules may
-	// clean inside. Adding an entry here requires a matching safety review.
-	g.exemptions = appendLoc(g.exemptions, locs.WindowsTemp, "Windows Temp directory", false)
-
-	// Credentials, keys, wallets, VM disks and AI-tool state: never deleted,
-	// whatever the purpose, and no rule may be rooted in or above them.
 	join := func(base string, rel ...string) string {
 		if base == "" {
 			return ""
 		}
 		return base + `\` + strings.Join(rel, `\`)
 	}
+
+	// Narrow, individually reviewed system subtrees that cleanup rules may
+	// clean inside. Adding an entry here requires a matching safety review.
+	g.exemptions = appendLoc(g.exemptions, locs.WindowsTemp, "Windows Temp directory", false)
+	// Windows Error Reporting copies for all users (Disk Cleanup removes them).
+	g.exemptions = appendLoc(g.exemptions, join(locs.ProgramData, "Microsoft", "Windows", "WER", "ReportArchive"), "system error reports", false)
+	g.exemptions = appendLoc(g.exemptions, join(locs.ProgramData, "Microsoft", "Windows", "WER", "ReportQueue"), "queued system error reports", false)
+	// Kernel minidumps written after a crash (Disk Cleanup removes them).
+	g.exemptions = appendLoc(g.exemptions, join(locs.Windows, "Minidump"), "crash minidumps", false)
+
+	// Credentials, keys, wallets, VM disks and AI-tool state: never deleted,
+	// whatever the purpose, and no rule may be rooted in or above them.
 	for _, s := range []struct{ path, label string }{
 		{join(locs.UserProfile, ".ssh"), "SSH keys"},
 		{join(locs.UserProfile, ".gnupg"), "GnuPG keys"},

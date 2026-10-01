@@ -16,16 +16,23 @@ before the next begins.
 - [x] `oow clean` with four extremely safe targets
 - [x] Sandbox mode and fixture-based test suite; CI on Windows Server 2025/2022
 
-## Phase 2 — Cleanup engine
+## Phase 2 — Cleanup engine ✅
 
-- [ ] Browser caches: Chrome, Edge, Brave, Opera, Vivaldi, Firefox (all profiles; cache only)
-- [ ] Application caches: Discord, Slack, Spotify, Teams, VS Code, JetBrains, Adobe, launchers…
-- [ ] Windows caches: thumbnails, icon cache, Delivery Optimization, Windows Update downloads,
-      GPU vendor shader caches, crash dumps, logs
-- [ ] Developer caches: npm, yarn, pnpm, pip, NuGet, Go build cache, Gradle, Maven…
-- [ ] Recycle Bin (Shell API)
-- [ ] Skip caches of running applications
-- [ ] Elevation on demand for admin-only targets
+- [x] `{profile}` roots that expand only to real profiles (marker file), never through links
+- [x] Browser caches: Chrome (+Beta/Canary), Chromium, Edge, Brave, Vivaldi, Opera, Firefox
+- [x] Application caches: Discord, Slack, Teams, VS Code, Cursor, Spotify, Steam, Epic,
+      Battle.net, Adobe, JetBrains (opt-in)
+- [x] Windows caches: GPU vendor shader caches, Temporary Internet Files, thumbnails (opt-in),
+      system error reports, crash dumps and minidumps (opt-in)
+- [x] Developer caches by recovery contract: npm, Yarn, pip, NuGet HTTP, Go build, Cargo
+      archives, Electron, node-gyp, Composer, TypeScript, golangci-lint, Gradle (opt-in)
+- [x] Recycle Bin through the Shell API (opt-in; simulated in sandbox mode)
+- [x] Skip caches of running applications
+- [x] Sensitive locations and file types never cleaned
+- [x] Elevation on demand for admin-only targets (separate elevated window)
+- [x] One-screen report: empty and not-installed targets collapsed
+- Deferred to Phase 6 (`optimize`, owner APIs only): Delivery Optimization, Windows Update
+  download cache, component store
 
 ## Phase 3 — Uninstaller
 

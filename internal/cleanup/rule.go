@@ -59,9 +59,27 @@ type Rule struct {
 	Name     string
 	Category Category
 
+	// App is the display name of the owning application ("Google Chrome"),
+	// used in messages such as "close Google Chrome to clean this".
+	App string
+
 	// Roots are path templates such as `{LocalAppData}\D3DSCache`. Only the
 	// contents of a root are cleaned, never the root itself.
+	//
+	// A root may contain one `{profile}` component, which expands to every
+	// real directory at that position that contains ProfileMarker (a file or
+	// folder name), e.g. `...\User Data\{profile}\Cache` with marker
+	// "Preferences" matches Default, Profile 1, ... but not unrelated folders.
 	Roots []string
+	// ProfileMarker identifies real profile directories for `{profile}`.
+	ProfileMarker string
+	// ProfileExclude lists directory names `{profile}` never expands to.
+	ProfileExclude []string
+
+	// Special names a non-file target handled by Env.Specials (for example
+	// the Recycle Bin, which is emptied through the Shell API). Special rules
+	// have no Roots.
+	Special string
 
 	// Include, when non-empty, limits candidates to files whose name matches
 	// one of these patterns (filepath.Match syntax, case-insensitive).
@@ -95,6 +113,8 @@ type Rule struct {
 
 var ruleID = regexp.MustCompile(`^[a-z0-9]+(?:[.-][a-z0-9]+)+$`)
 
+const profileToken = "{profile}"
+
 // Validate checks a rule definition for mistakes that could make it unsafe
 // or confusing. The test suite runs it over every built-in rule.
 func (r *Rule) Validate() error {
@@ -104,11 +124,17 @@ func (r *Rule) Validate() error {
 	if r.Name == "" || r.What == "" || r.WhySafe == "" || r.Impact == "" {
 		return fmt.Errorf("rule %s: Name, What, WhySafe and Impact are required", r.ID)
 	}
+	if r.Special != "" {
+		if len(r.Roots) > 0 {
+			return fmt.Errorf("rule %s: special rules have no roots", r.ID)
+		}
+		return nil
+	}
 	if len(r.Roots) == 0 {
 		return fmt.Errorf("rule %s: at least one root is required", r.ID)
 	}
 	for _, root := range r.Roots {
-		if !strings.HasPrefix(root, "{") {
+		if !strings.HasPrefix(root, "{") || strings.HasPrefix(root, profileToken) {
 			return fmt.Errorf("rule %s: root %q must start with a location token like {LocalAppData}", r.ID, root)
 		}
 		if strings.ContainsAny(root, "*?") || strings.Contains(root, "..") {
@@ -117,6 +143,14 @@ func (r *Rule) Validate() error {
 		rest := root[strings.Index(root, "}")+1:]
 		if strings.Trim(rest, `\`) == "" && root != "{Temp}" && root != "{WindowsTemp}" {
 			return fmt.Errorf("rule %s: root %q is a bare location; target a specific subfolder", r.ID, root)
+		}
+		switch n := strings.Count(root, profileToken); {
+		case n > 1:
+			return fmt.Errorf("rule %s: root %q has more than one {profile}", r.ID, root)
+		case n == 1 && r.ProfileMarker == "":
+			return fmt.Errorf("rule %s: root %q uses {profile} without a ProfileMarker", r.ID, root)
+		case n == 1 && !strings.Contains(root, `\`+profileToken+`\`):
+			return fmt.Errorf("rule %s: {profile} must be a whole middle path component in %q", r.ID, root)
 		}
 	}
 	for _, pat := range append(append([]string{}, r.Include...), r.Exclude...) {

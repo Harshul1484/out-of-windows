@@ -100,14 +100,14 @@ func cleanReport(app *App, res *cleanup.ScanResult, selected map[string]bool, ou
 			Reason:      rs.Reason,
 			Selected:    sel,
 			Roots:       nonNil(rs.Roots),
-			Files:       len(rs.Files),
+			Files:       rs.ItemCount(),
 			Bytes:       rs.Bytes,
 			KeptRecent:  rs.KeptRecent,
 			Skipped:     rs.Skipped.Total(),
 			SkipReasons: nonNilReasons(rs.Skipped.Reasons()),
 		}
 		if sel {
-			r.Summary.SelectedFiles += len(rs.Files)
+			r.Summary.SelectedFiles += rs.ItemCount()
 			r.Summary.SelectedBytes += rs.Bytes
 		}
 		if details {

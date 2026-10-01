@@ -1,6 +1,6 @@
 # Security Audit
 
-Status: **v0.1.0-dev (Phase 1)**. This document records what the code does today. Planned
+Status: **v0.1.0-dev (Phases 1–2)**. This document records what the code does today. Planned
 controls are listed separately under *Known limitations and future work*; nothing in the
 other sections is aspirational. Update this file in the same change as any safety-relevant
 code.
@@ -82,11 +82,35 @@ Start Menu, Programs, Startup (user and common), SendTo, Templates,
 ```
 
 System trees may be cleaned only inside a **reviewed exemption**. Exemptions live in the
-guard, not in rules. Current list:
+guard, not in rules. Current list (all admin-only, all also cleaned by Windows Disk Cleanup):
 
 ```text
 %WINDIR%\Temp
+%ProgramData%\Microsoft\Windows\WER\ReportArchive
+%ProgramData%\Microsoft\Windows\WER\ReportQueue
+%WINDIR%\Minidump
 ```
+
+### Application data boundaries
+
+- **Profile roots** (`{profile}`) expand only to real directories containing the rule's
+  marker file (e.g. Chromium's `Preferences`, Firefox's `cache2`), never through junctions or
+  symlinks, and never to excluded names (JetBrains `Toolbox`). Only named cache folders inside
+  a profile are roots.
+- **Browsers**: only `Cache`, `Code Cache`, `GPUCache` and browser-wide shader caches. Cookies,
+  `Login Data`, `Web Data`, `History`, `Bookmarks`, `Local State`, extensions, Service Worker
+  storage, IndexedDB and Local Storage are never roots, and their file names are also on the
+  sensitive list.
+- **Running applications**: a rule whose `AppProcesses` is running is skipped entirely
+  ("close it to clean this"); the process list comes from a Toolhelp snapshot.
+- **Opt-in** (listed but unselected): Recycle Bin, thumbnail cache, JetBrains caches and
+  indexes, Adobe media cache, Gradle caches, app crash dumps, kernel minidumps.
+- **Never targeted** developer stores: `~\.m2\repository`, `~\.nuget\packages`, pnpm store,
+  Cargo `registry\src` and `git`, `%LOCALAPPDATA%\Pub\Cache`, `ms-playwright`, Deno dir, model
+  caches, `~\.rustup`, `~\.cargo\bin`.
+- **Recycle Bin** is emptied with `SHEmptyRecycleBinW` (no confirmation UI, after `oow`'s own
+  confirmation, which states the items cannot be restored); counts come from
+  `SHQueryRecycleBinW` before and after. Sandbox mode uses a simulated bin folder.
 
 ### User content (never touched by automatic cleanup)
 
@@ -160,8 +184,12 @@ protected together with their ancestors (deleting a parent would delete them).
 
 ## Privilege boundaries
 
-- `oow` never requires elevation as a whole and never self-elevates today.
-- Rules marked `RequiresAdmin` are skipped with an explanation when not elevated.
+- `oow` never requires elevation as a whole and never elevates silently.
+- Rules marked `RequiresAdmin` are skipped with an explanation when not elevated. In an
+  interactive session `oow clean` then *offers* to start a separate elevated window
+  (`ShellExecuteExW` with `runas`, i.e. the standard UAC prompt) limited to exactly those
+  targets; that window runs its own scan, report, checklist and confirmation. Declining UAC
+  changes nothing. Sandbox mode never elevates.
 - Elevated runs use exactly the same guard, exemptions and verified sink; elevation never
   widens what may be deleted.
 - `FILE_FLAG_BACKUP_SEMANTICS` is used to open directories; `oow` does not enable
@@ -216,7 +244,12 @@ protected together with their ancestors (deleting a parent would delete them).
 | Whitelist (rules and paths), malformed config | `TestWhitelistedRuleSkipped`, `TestWhitelistedPathKept`, `TestWhitelistRuleAndPath`, `TestMalformedConfigBlocksClean` |
 | Redirected or missing roots | `TestRedirectedRootIsNotCleaned`, `TestMissingRootIsEmpty` |
 | Cancellation | `TestCancelledExecuteRemovesNothing`, `TestCancelledScan`, `TestWalkCancellation` |
-| End-to-end on a real VM | `scripts/ci/e2e-real.ps1` |
+| Browser profile data, Electron app state, dev stores kept | `internal/cleanup/phase2_test.go` (`TestChromium…`, `TestFirefoxCacheOnly`, `TestElectronAppsKeepStateAndSettings`, `TestDeveloperCachesFollowRecoveryContract`, `TestINetCacheKeepsOutlookAttachments`, `TestJetBrainsIsOptInAndKeepsLocalHistory`) |
+| Running apps skipped | `TestRunningAppIsSkipped` |
+| Recycle Bin special, opt-in | `TestRecycleBinSpecial`, `internal/cli` `TestOptInTargetsNeedExplicitSelection` |
+| Rule schema (`{profile}`, specials, roots) | `TestRuleSchemaValidation`, `TestBuiltinRulesAreValid` |
+| Win32 struct layouts | `internal/elevation` `TestShellExecuteInfoSize`, `internal/system` `TestRecycleBinInfoLayout` |
+| End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.
@@ -231,11 +264,12 @@ developer's real system.
 - Free-space deltas are approximate when other programs write concurrently.
 - No releases exist yet. Planned: signed binaries, SHA-256 checksums, build-provenance
   attestations, and installers that verify and fail closed.
-- Planned with their own reviews: browser and application caches (profile-marker roots,
-  skip-while-running), Recycle Bin emptying through the Shell API, elevation on demand,
-  uninstall and leftovers (exact evidence and confidence levels), disk analyzer deletion via
-  the Recycle Bin, purge safety rules (Git-tracked content, nested repositories, recent
-  activity), `optimize` tasks through supported Windows APIs only.
+- Cache locations of third-party apps are taken from their documented or long-standing
+  layouts; when an app changes its layout the rule finds nothing (it never widens).
+- Planned with their own reviews: uninstall and leftovers (exact evidence and confidence
+  levels), disk analyzer deletion via the Recycle Bin, purge safety rules (Git-tracked
+  content, nested repositories, recent activity), `optimize` tasks through supported Windows
+  APIs only (Delivery Optimization, Windows Update cache, component store).
 - Threat modelling of elevated uninstall flows (running vendor uninstallers) is pending.
 
 To report a problem, see [SECURITY.md](SECURITY.md).

@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-2025
     permissions:
       contents: read
-      security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -25,6 +25,24 @@ jobs:
         with:
           languages: go
           build-mode: manual
+          queries: security-and-quality
       - name: build
         run: go build ./...
+      # Code scanning upload needs GitHub Advanced Security on private
+      # repositories, so results are checked here instead. Switch to
+      # `upload: always` (and add `security-events: write`) once public.
       - uses: github/codeql-action/analyze@v4
+        with:
+          upload: never
+          output: codeql-results
+      - name: fail on findings
+        shell: pwsh
+        run: |
+          $sarif = Get-ChildItem codeql-results -Filter *.sarif | Get-Content -Raw | ConvertFrom-Json
+          $results = @($sarif.runs | ForEach-Object { $_.results } | Where-Object { $_ })
+          foreach ($r in $results) {
+            $loc = $r.locations[0].physicalLocation
+            Write-Host "::error file=$($loc.artifactLocation.uri),line=$($loc.region.startLine)::[$($r.ruleId)] $($r.message.text)"
+          }
+          if ($results.Count -gt 0) { throw "CodeQL reported $($results.Count) finding(s)" }
+          Write-Host 'CodeQL: no findings.'

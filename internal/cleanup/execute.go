@@ -155,6 +155,15 @@ func Execute(ctx context.Context, env *Env, scans []*RuleScan, prog *Progress) *
 		out.Rules = append(out.Rules, ro)
 		prog.setCurrent(s.Rule.Name)
 
+		if s.Rule.Special != "" {
+			if ctx.Err() != nil {
+				out.Cancelled = true
+				break
+			}
+			executeSpecial(ctx, env, s, ro, prog)
+			continue
+		}
+
 		for _, it := range s.Files {
 			if ctx.Err() != nil {
 				out.Cancelled = true
@@ -216,6 +225,25 @@ func Execute(ctx context.Context, env *Env, scans []*RuleScan, prog *Progress) *
 	}
 	out.Duration = time.Since(start)
 	return out
+}
+
+func executeSpecial(ctx context.Context, env *Env, s *RuleScan, ro *RuleOutcome, prog *Progress) {
+	sp := env.Specials[s.Rule.Special]
+	if sp == nil {
+		ro.Skipped.Add(s.Rule.Name, "not available on this system")
+		return
+	}
+	items, bytes, err := sp.Clean(ctx)
+	ro.Removed, ro.Reclaimed = items, bytes
+	prog.add(items, bytes)
+	if err != nil {
+		reason, isErr := classify(err)
+		ro.Skipped.Add(s.Rule.Name, reason)
+		if isErr {
+			ro.Errors++
+			slog.Error("special cleanup failed", "rule", s.Rule.ID, "err", err)
+		}
+	}
 }
 
 // policyCheck re-runs the safety guard on the OS-resolved final path.
