@@ -144,11 +144,8 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
+	_, werr := tmp.Write(append(data, '\n'))
+	if err := errors.Join(werr, tmp.Sync(), tmp.Close()); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

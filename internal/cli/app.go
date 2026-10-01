@@ -66,7 +66,7 @@ type App struct {
 	Locations   safety.Locations
 	Guard       *safety.Guard
 	Elevated    bool
-	closeLog    func()
+	closeLog    func() error
 }
 
 // interactive reports whether we can prompt the user.
@@ -147,7 +147,9 @@ func (a *App) requireConfig() error {
 
 func (a *App) close() {
 	if a.closeLog != nil {
-		a.closeLog()
+		if err := a.closeLog(); err != nil {
+			fmt.Fprintf(a.Err, "warning: could not write the log file: %v\n", err)
+		}
 	}
 }
 

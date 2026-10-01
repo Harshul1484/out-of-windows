@@ -66,11 +66,8 @@ func Append(dataDir string, r Record) error {
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
+	_, werr := f.Write(append(line, '\n'))
+	return errors.Join(werr, f.Close())
 }
 
 // Load returns up to limit records, newest first (limit <= 0 means all).

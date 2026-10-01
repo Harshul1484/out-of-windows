@@ -7,6 +7,7 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -16,18 +17,19 @@ import (
 const maxLogSize = 5 << 20
 
 // Setup installs the default logger and returns a function that flushes and
-// closes the log file. Failure to open the log file is not fatal.
-func Setup(logDir string, debug bool, stderr io.Writer) func() {
+// closes the log file, reporting any error. Failure to open the log file is
+// not fatal.
+func Setup(logDir string, debug bool, stderr io.Writer) func() error {
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
 	}
 	var handlers []slog.Handler
-	var closer io.Closer
+	var file *os.File
 
 	if logDir != "" {
 		if f, err := openLog(logDir); err == nil {
-			closer = f
+			file = f
 			handlers = append(handlers, slog.NewJSONHandler(f, &slog.HandlerOptions{Level: level}))
 		}
 	}
@@ -35,10 +37,11 @@ func Setup(logDir string, debug bool, stderr io.Writer) func() {
 		handlers = append(handlers, slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
 	slog.SetDefault(slog.New(fanout(handlers)))
-	return func() {
-		if closer != nil {
-			closer.Close()
+	return func() error {
+		if file == nil {
+			return nil
 		}
+		return errors.Join(file.Sync(), file.Close())
 	}
 }
 
