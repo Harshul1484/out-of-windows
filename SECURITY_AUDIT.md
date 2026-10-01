@@ -1,6 +1,6 @@
 # Security Audit
 
-Status: **v0.1.0-dev (Phases 1–2)**. This document records what the code does today. Planned
+Status: **v0.1.0-dev (Phases 1–3)**. This document records what the code does today. Planned
 controls are listed separately under *Known limitations and future work*; nothing in the
 other sections is aspirational. Update this file in the same change as any safety-relevant
 code.
@@ -145,6 +145,37 @@ Login Data, Cookies, Web Data, History, Bookmarks, Local State,
 key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlite
 ```
 
+### Uninstall and leftovers
+
+- `oow uninstall` never deletes program folders itself. It starts the registered mechanism
+  (`msiexec /x {ProductCode}`, the registered `UninstallString` / `QuietUninstallString`,
+  `Remove-AppxPackage`, `scoop uninstall`, `choco uninstall`) through `ShellExecuteExW`, so an
+  uninstaller that needs administrator rights raises the normal UAC prompt; Chocolatey and global
+  Scoop apps are started elevated explicitly. `MsiExec /I` registrations are converted to `/x`.
+- Removal is verified by re-reading the registration (registry key, package list, package
+  folder); errors other than "not found" count as still installed. Only a verified removal
+  proceeds to leftovers.
+- Entries whose registered uninstaller is missing are not offered for uninstall; they become
+  leftover evidence only when the app's program is gone too.
+- Leftover candidates come only from evidence (see `docs/SAFETY.md` §3b) and pass
+  `Guard.Check` with `PurposeLeftover`: scope must be a leftover root (Program Files, Program
+  Files (x86), ProgramData, Roaming, Local, LocalLow, `Local\Programs`), depth ≤ 3, first
+  component not Windows/Microsoft-owned or shared (`Common Files`, `WindowsApps`,
+  `Package Cache`, `Packages`, `Temp`, package managers), never user content, sensitive,
+  protected or critical locations, never the Windows directory.
+- Claims from installed apps, running processes (`QueryFullProcessImageName`), services
+  (`ImagePath`) and Run/RunOnce entries keep folders; claims that would cover an entire root
+  (from malformed registrations) are ignored rather than widening anything.
+- Folders containing sensitive file types are never offered.
+- Leftovers are moved with `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO`, plus
+  `FOF_WANTNUKEWARNING` so the Shell warns instead of silently deleting), only on fixed drives,
+  after `filesystem.Verify` re-checks identity, links, the fence and the guard through a handle.
+  The short interval between verification and the Shell call is acceptable because the
+  operation is recoverable from the Recycle Bin. A publisher folder left empty is removed with
+  the verified deletion sink.
+- Only high-confidence leftovers are preselected; `--yes` moves only those. Program Files and
+  ProgramData candidates require elevation and are otherwise offered in an elevated window.
+
 ### Tool-owned and whitelisted locations
 
 `oow`'s own config and data directories, and every path in the user's whitelist, are
@@ -248,8 +279,13 @@ protected together with their ancestors (deleting a parent would delete them).
 | Running apps skipped | `TestRunningAppIsSkipped` |
 | Recycle Bin special, opt-in | `TestRecycleBinSpecial`, `internal/cli` `TestOptInTargetsNeedExplicitSelection` |
 | Rule schema (`{profile}`, specials, roots) | `TestRuleSchemaValidation`, `TestBuiltinRulesAreValid` |
-| Win32 struct layouts | `internal/elevation` `TestShellExecuteInfoSize`, `internal/system` `TestRecycleBinInfoLayout` |
-| End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin) |
+| Win32 struct layouts | `internal/elevation` `TestShellExecuteInfoSize`, `internal/system` `TestRecycleBinInfoLayout`, `internal/filesystem` `TestSHFileOpStructLayout` |
+| Leftover guard purpose | `internal/safety` `TestLeftoverPurpose` |
+| Uninstall plans, waiting, verification, cancel, restart, failure | `internal/uninstall/uninstall_test.go` |
+| Leftovers: evidence, confidence, claims, traces, broken entries, sensitive content, admin, junctions, swaps | `internal/leftovers/leftovers_test.go` |
+| Uninstall/leftovers CLI (dry run, confirmation, JSON, failure, end to end) | `internal/cli/uninstall_test.go` |
+| Name normalization and command-line parsing | `internal/apps/apps_test.go` |
+| End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin, uninstall of a registered app with leftovers) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.
@@ -266,8 +302,9 @@ developer's real system.
   attestations, and installers that verify and fail closed.
 - Cache locations of third-party apps are taken from their documented or long-standing
   layouts; when an app changes its layout the rule finds nothing (it never widens).
-- Planned with their own reviews: uninstall and leftovers (exact evidence and confidence
-  levels), disk analyzer deletion via the Recycle Bin, purge safety rules (Git-tracked
+- Vendor uninstallers are third-party programs: `oow` controls when they run and verifies the
+  result, not what they do. Scheduled tasks are not yet used as claims.
+- Planned with their own reviews: disk analyzer deletion via the Recycle Bin, purge safety rules (Git-tracked
   content, nested repositories, recent activity), `optimize` tasks through supported Windows
   APIs only (Delivery Optimization, Windows Update cache, component store).
 - Threat modelling of elevated uninstall flows (running vendor uninstallers) is pending.

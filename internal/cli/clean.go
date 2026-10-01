@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 	"github.com/Harshul1484/out-of-windows/internal/cleanup"
-	"github.com/Harshul1484/out-of-windows/internal/elevation"
 	"github.com/Harshul1484/out-of-windows/internal/history"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
 	"github.com/Harshul1484/out-of-windows/internal/system"
@@ -246,16 +244,8 @@ func offerElevation(ctx context.Context, app *App, res *cleanup.ScanResult) {
 	if err != nil || !ok {
 		return
 	}
-	code, err := elevation.Relaunch([]string{"clean", "--rule", strings.Join(ids, ","), "--pause"})
-	switch {
-	case errors.Is(err, elevation.ErrDeclined):
-		app.printf(" %s\n\n", ui.Muted.Render("Administrator permission was not granted. Nothing else was changed."))
-	case err != nil:
-		app.printf(" %s could not start an elevated window: %v\n\n", ui.Err.Render(ui.SymErr), err)
-	default:
-		app.printf(" %s Elevated cleanup finished (exit code %d). See `%s history` for what it removed.\n\n",
-			ui.OK.Render(ui.SymOK), code, buildinfo.Name)
-	}
+	code, err := relaunchElevated([]string{"clean", "--rule", strings.Join(ids, ","), "--pause"})
+	reportElevated(app, code, err)
 }
 
 func (a *App) cleanupEnv() *cleanup.Env {

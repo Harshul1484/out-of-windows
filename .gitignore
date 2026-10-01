@@ -17,3 +17,6 @@ coverage.*
 # Personal agent overrides
 AGENTS.local.md
 CLAUDE.local.md
+
+# Claude Code session state
+.claude/*.lock

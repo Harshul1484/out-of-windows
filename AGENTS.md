@@ -95,7 +95,15 @@ arrives.
   windows, browsers, apps, dev, logs), `scan.go` (read-only scan, `{profile}` expansion,
   specials), `execute.go` (verified execution, skip reasons, outcome accounting).
 - `internal/elevation/`: relaunches one command elevated through the UAC prompt
-  (`ShellExecuteExW` `runas`) and waits for it. Never used silently.
+  (`ShellExecuteExW` `runas`) and waits for it, and runs uninstallers through the Shell. Never
+  used silently.
+- `internal/apps/`: installed-app discovery (Uninstall registry views, AppX via PowerShell JSON,
+  Scoop, Chocolatey), name normalization (`NormalizeName`, `IsDistinctive`), uninstall
+  command-line parsing.
+- `internal/uninstall/`: uninstall plans per source, execution through a `Runner`, waiting and
+  verification through a `Checker`.
+- `internal/leftovers/`: evidence (uninstalled, history, broken entries, usage traces), claims
+  (installed apps, processes, services, startup), `Find` with confidence, `Recycle`.
 - `internal/safety/`: Win32 path normalization (`path.go`), discovered locations
   (`locations.go`, `locations_windows.go`), and the `Guard` (`guard.go`): protected,
   system, user-content, sensitive and whitelisted locations, exemptions, root validation.
@@ -284,6 +292,11 @@ Keep edits narrow and run the listed tests when touching each area.
   after any change, not just the reported line.
 - `internal/ui/*`: run `go test ./internal/ui`; check `NO_COLOR` and narrow terminals.
 - `internal/config`, `internal/history`: schema changes need migration and tests.
+- `internal/leftovers/find.go` and `internal/apps/app.go` (normalization, generic names): a
+  matcher change can widen what is offered. Run `go test ./internal/leftovers ./internal/apps
+  ./internal/cli` and add a sandbox case (`sandbox/apps.go`) for every new evidence or claim type.
+- `internal/uninstall`: never add a code path that deletes program files directly; every
+  removal goes through the app's own mechanism and `Checker` verification.
 - `.github/workflows/ci.yml`, `scripts/ci/e2e-real.ps1`: keep canaries covering user content,
   app data, ProgramData and junctions.
 

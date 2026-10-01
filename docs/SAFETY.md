@@ -90,6 +90,32 @@ on discovery succeeding.
   lies in user content or the whitelist. A hijacked `%TEMP%` (e.g. pointed at `C:\` or
   Documents) therefore cannot become a cleanup root.
 
+### 3b. Uninstall and leftovers
+
+- **Uninstall never deletes.** `oow` runs the app's own uninstaller (Windows Installer
+  `msiexec /x`, the registered uninstall command, `Remove-AppxPackage`, Scoop or Chocolatey)
+  and then checks the registration is gone. A failed or cancelled uninstall stops there; an
+  unreadable registry state counts as "still installed".
+- **Leftovers need evidence.** A folder is a candidate only with evidence that an app which is
+  gone owned it: the install folder it registered, an exact normalized name match (versions,
+  architecture tags and legal suffixes removed; names shorter than four characters or generic
+  words like "data" or "launcher" never count), the app's executable inside, or the
+  publisher's folder. Evidence comes from the app just uninstalled, oow's history, registry
+  entries whose uninstaller and program are gone, and Windows usage traces (MuiCache and the
+  Program Compatibility Assistant) of executables that no longer exist. Usage-trace evidence is
+  at most medium confidence and ignored when the folder changed in the last 7 days.
+- **Claims keep folders.** Anything matching an installed app (name, install folder, program
+  folder), a running process, a service or a startup entry is kept and listed as such.
+- **The leftover purpose** of the guard allows only folders at most three levels inside
+  Program Files, ProgramData, AppData (Roaming, Local, LocalLow) or `AppData\Local\Programs`,
+  never Windows- or Microsoft-owned, shared (Common Files, WindowsApps, Package Cache,
+  Packages, Temp) or package-manager folders, never user content, sensitive or protected
+  locations, and never folders containing sensitive files.
+- **Leftovers go to the Recycle Bin** after the same handle-based identity, link and final-path
+  verification as deletion, through the Shell (`SHFileOperationW` with undo). Drives without a
+  Recycle Bin are refused rather than deleted from. Only high-confidence leftovers are
+  preselected, and `--yes` takes only those.
+
 ### 4. Scanning
 
 The walker never descends into reparse points (junctions, symlinks, mount points); they are

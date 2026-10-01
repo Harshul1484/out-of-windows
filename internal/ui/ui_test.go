@@ -116,6 +116,57 @@ func TestChecklistViewShowsNotesAndTotal(t *testing.T) {
 	}
 }
 
+func pickerItems() []PickItem {
+	return []PickItem{
+		{Title: "Contoso Studio", Subtitle: "4.2 · Contoso", Right: "7.5 MB", Size: 7_900_000},
+		{Title: "Fabrikam Player", Subtitle: "2.0 · Fabrikam", Right: "742 KB", Size: 760_000},
+		{Title: "Litware Tool", Disabled: true, Note: "uninstaller is missing"},
+		{Title: "Wingtip Toys", Subtitle: "9.0", Right: "488 KB", Size: 500_000},
+	}
+}
+
+func TestPickerSearchAndChoose(t *testing.T) {
+	m := NewPickerModel(PickerOptions{Title: "Uninstall"}, pickerItems())
+	m = press(m, "/", "w", "i", "n", "enter", "enter")
+	r := PickerOutcome(m)
+	if !r.Confirmed || len(r.Selected) != 1 || r.Selected[0] != 3 {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestPickerSkipsDisabledAndSorts(t *testing.T) {
+	m := NewPickerModel(PickerOptions{}, pickerItems())
+	m = press(m, "down", "down", "enter") // Litware Tool is disabled
+	if r := PickerOutcome(m); r.Confirmed {
+		t.Fatalf("disabled item chosen: %+v", r)
+	}
+	m = press(NewPickerModel(PickerOptions{}, pickerItems()), "s", "down", "enter") // by size: Fabrikam second
+	if r := PickerOutcome(m); len(r.Selected) != 1 || r.Selected[0] != 1 {
+		t.Fatalf("sorted result = %+v", r)
+	}
+}
+
+func TestPickerMultiAndCancel(t *testing.T) {
+	m := press(NewPickerModel(PickerOptions{Multi: true}, pickerItems()), "space", "down", "space", "enter")
+	if r := PickerOutcome(m); len(r.Selected) != 2 || r.Selected[0] != 0 || r.Selected[1] != 1 {
+		t.Fatalf("multi = %+v", r)
+	}
+	m = press(NewPickerModel(PickerOptions{}, pickerItems()), "/", "x", "esc", "q")
+	if r := PickerOutcome(m); r.Confirmed {
+		t.Fatal("quit confirmed")
+	}
+}
+
+func TestPickerViewShowsNotes(t *testing.T) {
+	Init("never", true)
+	v := NewPickerModel(PickerOptions{Title: "Uninstall apps", Noun: "app"}, pickerItems()).View()
+	for _, want := range []string{"Uninstall apps", "Contoso Studio", "uninstaller is missing", "7.5 MB", "4 apps"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+}
+
 func homeOpts() HomeOptions {
 	return HomeOptions{
 		Product: "OOW", OS: "Windows 11",

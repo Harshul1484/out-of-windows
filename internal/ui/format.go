@@ -93,6 +93,18 @@ func TruncateMiddle(s string, width int) string {
 	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }
 
+// Truncate shortens s to width runes, cutting at the end.
+func Truncate(s string, width int) string {
+	r := []rune(s)
+	if width <= 0 || len(r) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(r[:width-1]) + "…"
+}
+
 // PadRight pads a (possibly styled) string to a visible width.
 func PadRight(s string, width int) string {
 	if w := lipgloss.Width(s); w < width {

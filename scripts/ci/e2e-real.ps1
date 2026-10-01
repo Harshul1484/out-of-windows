@@ -139,6 +139,52 @@ Assert-Canaries
 Write-Host "Recycle Bin emptied: $($rb.summary.removed) item(s), $($rb.summary.reclaimed_bytes) bytes."
 Write-Host '::endgroup::'
 
+Write-Host '::group::uninstall a registered app (real registry, Shell, Recycle Bin)'
+$appDir = Join-Path $env:LOCALAPPDATA 'Programs\OOW CI App'
+$appData = Join-Path $env:APPDATA 'OOW CI App'
+$unrelated = Join-Path $env:APPDATA 'OOW CI Unrelated\data.txt'
+$regKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OOWCIApp'
+New-File (Join-Path $appDir 'app.exe') 50000
+New-File (Join-Path $appDir 'cache\keep.bin') 20000
+New-File (Join-Path $appData 'settings.json') 3000
+New-File $unrelated 100
+$canaries += $unrelated
+# The app's own uninstaller removes its program and registry entry but
+# leaves a cache folder and its AppData behind, like many real ones.
+Set-Content -LiteralPath (Join-Path $appDir 'uninstall.cmd') -Encoding ascii -Value @"
+@echo off
+del /f /q "%~dp0app.exe"
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\OOWCIApp" /f >nul
+"@
+New-Item -Path $regKey -Force | Out-Null
+New-ItemProperty -Path $regKey -Name DisplayName -Value 'OOW CI App' | Out-Null
+New-ItemProperty -Path $regKey -Name DisplayVersion -Value '1.0' | Out-Null
+New-ItemProperty -Path $regKey -Name Publisher -Value 'OOW CI' | Out-Null
+New-ItemProperty -Path $regKey -Name InstallLocation -Value $appDir | Out-Null
+New-ItemProperty -Path $regKey -Name DisplayIcon -Value (Join-Path $appDir 'app.exe') | Out-Null
+New-ItemProperty -Path $regKey -Name UninstallString -Value ('"' + (Join-Path $appDir 'uninstall.cmd') + '"') | Out-Null
+
+$list = & $Oow uninstall --list --json | ConvertFrom-Json
+Write-Host "Inventory: $($list.apps.Count) apps; package managers: $($list.package_managers | ConvertTo-Json -Compress)"
+if (-not ($list.apps | Where-Object { $_.name -eq 'OOW CI App' })) { throw 'test app not found in the inventory' }
+$dry = & $Oow uninstall 'OOW CI App' --dry-run --json | ConvertFrom-Json
+if (-not $dry.dry_run -or -not (Test-Path (Join-Path $appDir 'app.exe'))) { throw 'uninstall dry run changed something' }
+
+$un = & $Oow uninstall 'OOW CI App' --yes --wait 60s --json | ConvertFrom-Json
+$r = $un.results[0]
+$r | ConvertTo-Json -Depth 6 | Write-Host
+if ($LASTEXITCODE -ne 0 -or -not $r.outcome.removed) { throw "uninstall failed: $($r.error)" }
+if (Test-Path $regKey) { throw 'uninstall entry still present' }
+if ((Test-Path $appDir) -or (Test-Path $appData)) { throw 'leftovers not moved to the Recycle Bin' }
+if ($r.recycled.recycled.Count -ne 2) { throw "expected 2 recycled leftovers, got $($r.recycled.recycled.Count)" }
+Assert-Canaries
+Write-Host '::endgroup::'
+
+Write-Host '::group::leftovers scan (read-only)'
+& $Oow leftovers --dry-run
+if ($LASTEXITCODE -ne 0) { throw "leftovers dry run exited $LASTEXITCODE" }
+Write-Host '::endgroup::'
+
 Write-Host '::group::history'
 & $Oow history
 Write-Host '::endgroup::'

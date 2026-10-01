@@ -10,14 +10,17 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Harshul1484/out-of-windows/internal/apps"
 	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 	"github.com/Harshul1484/out-of-windows/internal/config"
 	"github.com/Harshul1484/out-of-windows/internal/filesystem"
+	"github.com/Harshul1484/out-of-windows/internal/leftovers"
 	"github.com/Harshul1484/out-of-windows/internal/logging"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
 	"github.com/Harshul1484/out-of-windows/internal/system"
 	"github.com/Harshul1484/out-of-windows/internal/ui"
+	"github.com/Harshul1484/out-of-windows/internal/uninstall"
 )
 
 // Exit codes. They are part of the documented scripting interface.
@@ -34,6 +37,15 @@ const (
 type exitError struct {
 	code int
 	err  error
+	// reported is set when the message was already shown to the user, so
+	// it is not printed a second time (JSON output still includes it).
+	reported bool
+}
+
+// alreadyReported returns an error carrying an exit code whose message the
+// command has already printed.
+func alreadyReported(code int, format string, args ...any) error {
+	return &exitError{code: code, err: fmt.Errorf(format, args...), reported: true}
 }
 
 func (e *exitError) Error() string { return e.err.Error() }
@@ -185,6 +197,51 @@ func cancelledErr(ctx context.Context) error {
 		return errCancelled
 	}
 	return nil
+}
+
+// The following choose real-system or simulated implementations, so every
+// command runs unchanged in sandbox mode without touching the real machine.
+
+func (a *App) appProvider() apps.Provider {
+	if a.Sandbox != "" {
+		return sandbox.Apps{Root: a.Sandbox}
+	}
+	return apps.System{}
+}
+
+func (a *App) uninstallRunner() uninstall.Runner {
+	if a.Sandbox != "" {
+		return sandbox.Apps{Root: a.Sandbox}
+	}
+	return uninstall.SystemRunner{}
+}
+
+func (a *App) uninstallChecker() uninstall.Checker {
+	if a.Sandbox != "" {
+		return sandbox.Apps{Root: a.Sandbox}
+	}
+	return uninstall.SystemChecker{}
+}
+
+func (a *App) recycler() filesystem.Recycler {
+	if a.Sandbox != "" {
+		return sandbox.Recycler{Root: a.Sandbox}
+	}
+	return filesystem.ShellRecycler{}
+}
+
+func (a *App) usageTraces() []leftovers.Trace {
+	if a.Sandbox != "" {
+		return sandbox.Traces(a.Sandbox)
+	}
+	return leftovers.ReadTraces()
+}
+
+func (a *App) systemClaims() []leftovers.ClaimPath {
+	if a.Sandbox != "" {
+		return nil
+	}
+	return leftovers.SystemClaims()
 }
 
 // productName is shown on the home screen.

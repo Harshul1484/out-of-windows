@@ -298,6 +298,56 @@ func TestSensitiveFileTypesNeverAutoCleaned(t *testing.T) {
 	}
 }
 
+func TestLeftoverPurpose(t *testing.T) {
+	g := NewGuard(testLocations(), nil)
+	pf, pd := `C:\Program Files`, `C:\ProgramData`
+	roam, local := `C:\Users\alice\AppData\Roaming`, `C:\Users\alice\AppData\Local`
+	progs := local + `\Programs`
+	allowed := [][2]string{
+		{pf + `\Contoso`, pf},
+		{pf + `\Contoso\Studio`, pf},
+		{`C:\Program Files (x86)\Fabrikam\Player\bin`, `C:\Program Files (x86)`},
+		{pd + `\Contoso`, pd},
+		{roam + `\Contoso\Studio`, roam},
+		{local + `\Contoso Studio`, local},
+		{progs + `\Fabrikam Player`, progs},
+	}
+	for _, c := range allowed {
+		if d := g.Check(Request{Path: c[0], Purpose: PurposeLeftover, Scope: c[1]}); !d.Allowed {
+			t.Errorf("leftover %s denied: %s", c[0], d.Reason)
+		}
+	}
+	denied := [][2]string{
+		{pf, pf},                                                // the root itself
+		{pf + `\Common Files\Contoso`, pf},                      // shared
+		{pf + `\WindowsApps\Contoso.App_1.0`, pf},               // Store packages
+		{pf + `\Microsoft Office`, pf},                          // Microsoft
+		{pf + `\Windows Defender`, pf},                          // Windows
+		{pf + `\Contoso\a\b\c`, pf},                             // too deep
+		{pd + `\Microsoft\Windows\Start Menu`, pd},              // Windows
+		{pd + `\Package Cache\{1234}`, pd},                      // installer cache
+		{local + `\Temp\Contoso`, local},                        // temp
+		{local + `\Packages\Contoso.App_8w`, local},             // AppX data
+		{local + `\Microsoft\Teams`, local},                     // Microsoft
+		{progs + `\Fabrikam`, local},                            // wrong (less specific) root
+		{roam + `\oow`, roam},                                   // this tool
+		{roam + `\Bitwarden`, roam},                             // sensitive
+		{roam + `\Microsoft`, roam},                             // critical
+		{`C:\Users\alice\Documents\Contoso`, `C:\Users\alice`},  // not a leftover root
+		{`C:\Windows\Contoso`, `C:\Windows`},                    // not a leftover root
+		{pf + `\Contoso`, ""},                                   // no scope
+		{`C:\Program Files\Contoso\..\..\Windows\System32`, pf}, // traversal
+	}
+	for _, c := range denied {
+		if d := g.Check(Request{Path: c[0], Purpose: PurposeLeftover, Scope: c[1]}); d.Allowed {
+			t.Errorf("leftover %s (scope %q) allowed", c[0], c[1])
+		}
+	}
+	if r, ok := g.LeftoverRootFor(progs + `\Fabrikam\x`); !ok || r.Kind != "user programs" {
+		t.Errorf("LeftoverRootFor = %+v, %v", r, ok)
+	}
+}
+
 func TestCleanupWithoutScopeDenied(t *testing.T) {
 	g := NewGuard(testLocations(), nil)
 	d := g.Check(Request{Path: `E:\scratch\file.tmp`, Purpose: PurposeCleanup})

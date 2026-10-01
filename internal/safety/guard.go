@@ -48,7 +48,39 @@ const (
 	// PurposeUserSelected is a path the user chose explicitly (for example in
 	// the disk analyzer). It may touch user content but never system trees.
 	PurposeUserSelected
+	// PurposeLeftover is a folder left behind by an uninstalled app, reviewed
+	// by the user. Scope must be one of LeftoverRoots; the folder must be at
+	// most three levels below it and outside Windows-owned and shared
+	// folders. Leftovers go to the Recycle Bin.
+	PurposeLeftover
 )
+
+// LeftoverRoot is a location where applications keep their files.
+type LeftoverRoot struct {
+	Path string
+	Kind string // "program files", "app data", ...
+	// Admin is true when changing it normally needs administrator rights.
+	Admin bool
+}
+
+// leftoverDeny lists first-level folder names (patterns) under each kind of
+// leftover root that are never treated as app leftovers: Windows and
+// Microsoft components, shared runtimes, package managers and caches.
+var leftoverDeny = map[string][]string{
+	"program files": {"common files", "windows*", "microsoft*", "internet explorer", "modifiablewindowsapps",
+		"reference assemblies", "msbuild", "dotnet", "packagemanagement", "uninstall information",
+		"windowsapps", "windows defender*", "windowspowershell", "windows nt", "iis*", "dotnet*"},
+	"program data": {"microsoft*", "windows*", "packages", "package cache", "regid.*", "ssh", "usoshared",
+		"usoprivate", "chocolatey", "scoop", "docker*", "softwaredistribution", "applicationdata",
+		"start menu", "desktop", "documents", "templates", "favorites", "oow"},
+	"app data": {"microsoft*", "windows*", "npm", "npm-cache", "nuget", "code", "cursor", "oow"},
+	"local app data": {"microsoft*", "windows*", "packages", "temp", "programs", "publishers",
+		"connecteddevicesplatform", "d3dscache", "crashdumps", "comms", "placeholdertilelogofolder",
+		"virtualstore", "elevateddiagnostics", "pip", "npm-cache", "go-build", "nuget", "yarn",
+		"history", "inetcache", "oow", "docker"},
+	"local low":     {"microsoft*", "windows*"},
+	"user programs": {"common", "microsoft*", "windows*"},
+}
 
 // Request asks whether one path may be deleted.
 type Request struct {
@@ -88,6 +120,78 @@ type Guard struct {
 	exemptions  []location // system subtrees that rules may clean inside
 	protected   []location // whitelist + this tool's own directories
 	sensitive   []location // credentials, keys, wallets, VM and AI-tool state
+	leftover    []LeftoverRoot
+	windowsDir  string
+}
+
+// LeftoverRoots returns where app leftovers may be found, most specific
+// first (so LocalAppData\Programs wins over LocalAppData).
+func (g *Guard) LeftoverRoots() []LeftoverRoot { return append([]LeftoverRoot(nil), g.leftover...) }
+
+// LeftoverRootFor returns the most specific leftover root strictly
+// containing p.
+func (g *Guard) LeftoverRootFor(p string) (LeftoverRoot, bool) {
+	n, err := Normalize(p)
+	if err != nil {
+		return LeftoverRoot{}, false
+	}
+	for _, r := range g.leftover {
+		if IsStrictlyWithin(n, r.Path) {
+			return r, true
+		}
+	}
+	return LeftoverRoot{}, false
+}
+
+func (g *Guard) checkLeftover(p, scope string) Decision {
+	s, err := Normalize(scope)
+	if err != nil || scope == "" {
+		return deny(ClassOrdinary, "leftover removal requires a known install or data location")
+	}
+	var root *LeftoverRoot
+	for i := range g.leftover {
+		if Key(g.leftover[i].Path) == Key(s) {
+			root = &g.leftover[i]
+			break
+		}
+	}
+	if root == nil {
+		return deny(ClassOrdinary, "%s is not an install or data location", s)
+	}
+	if !IsStrictlyWithin(p, s) {
+		return deny(ClassOrdinary, "%s is outside %s", p, s)
+	}
+	// A more specific root (LocalAppData\Programs inside LocalAppData) owns it.
+	if best, ok := g.LeftoverRootFor(p); ok && Key(best.Path) != Key(s) {
+		return deny(ClassOrdinary, "%s belongs to %s", p, best.Path)
+	}
+	rel := strings.Split(p[len(s):], `\`)
+	parts := rel[:0]
+	for _, r := range rel {
+		if r != "" {
+			parts = append(parts, r)
+		}
+	}
+	if len(parts) == 0 || len(parts) > 3 {
+		return deny(ClassOrdinary, "%s is not a top-level application folder", p)
+	}
+	first := strings.ToLower(parts[0])
+	for _, pat := range leftoverDeny[root.Kind] {
+		if ok, _ := filepath.Match(pat, first); ok {
+			return deny(ClassSystem, "%s is inside a Windows or shared folder (%s)", p, parts[0])
+		}
+	}
+	if u, ok := g.containing(g.userContent, p); ok {
+		return deny(ClassUserContent, "%s is inside your %s", p, u.label)
+	}
+	if strings.HasPrefix(Key(p), Key(g.windowsDir)+`\`) || Key(p) == Key(g.windowsDir) {
+		return deny(ClassSystem, "%s is inside the Windows directory", p)
+	}
+	class := ClassOrdinary
+	if _, ok := g.containing(g.system, p); ok {
+		class = ClassSystem
+	}
+	return Decision{Allowed: true, Class: class}
 }
 
 // sensitiveNames are file name patterns that automatic cleanup never removes,
@@ -247,6 +351,32 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 		g.sensitive = appendLoc(g.sensitive, s.path, s.label, false)
 	}
 
+	// Where app leftovers may be removed from, most specific first.
+	g.windowsDir = sysDrive + "Windows"
+	if n, err := Normalize(locs.Windows); err == nil && locs.Windows != "" {
+		g.windowsDir = n
+	}
+	for _, r := range []LeftoverRoot{
+		{join(locs.LocalAppData, "Programs"), "user programs", false},
+		{locs.ProgramFiles, "program files", true},
+		{locs.ProgramFilesX86, "program files", true},
+		{locs.ProgramData, "program data", true},
+		{locs.RoamingAppData, "app data", false},
+		{locs.LocalLow, "local low", false},
+		{locs.LocalAppData, "local app data", false},
+	} {
+		if n, err := Normalize(r.Path); err == nil && r.Path != "" && !IsVolumeRoot(n) {
+			dup := false
+			for _, e := range g.leftover {
+				dup = dup || Key(e.Path) == Key(n)
+			}
+			if !dup {
+				r.Path = n
+				g.leftover = append(g.leftover, r)
+			}
+		}
+	}
+
 	for _, p := range locs.SelfDirs {
 		g.protected = appendLoc(g.protected, p, "used by "+toolDirLabel, false)
 	}
@@ -308,6 +438,9 @@ func (g *Guard) Check(req Request) Decision {
 	}
 	if req.Purpose == PurposeCleanup && IsSensitiveName(baseName(p)) {
 		return deny(ClassSensitive, "sensitive file type: %s is never removed by automatic cleanup", baseName(p))
+	}
+	if req.Purpose == PurposeLeftover {
+		return g.checkLeftover(p, req.Scope)
 	}
 
 	if req.Purpose == PurposeCleanup && strings.TrimSpace(req.Scope) == "" {

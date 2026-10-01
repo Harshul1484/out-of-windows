@@ -58,6 +58,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "\nCancelled. Nothing further was changed.")
 		return code
 	}
+	if ee != nil && ee.reported {
+		return code // the command already showed it (or wrote its JSON document)
+	}
 	if app.JSON {
 		_ = app.printJSON(map[string]any{"error": err.Error(), "exit_code": code})
 	} else {
@@ -105,6 +108,8 @@ func newRootCmd(app *App) *cobra.Command {
 	)
 	root.AddCommand(
 		newCleanCmd(app),
+		newUninstallCmd(app),
+		newLeftoversCmd(app),
 		newConfigCmd(app),
 		newHistoryCmd(app),
 		newVersionCmd(app),
@@ -192,8 +197,6 @@ type planned struct {
 }
 
 var plannedCommands = []planned{
-	{"uninstall", "Uninstall apps completely, including leftovers", "Phase 3", "clean", nil},
-	{"leftovers", "Find data left behind by apps that are no longer installed", "Phase 3", "clean", nil},
 	{"installer", "Find installer files you no longer need", "Phase 7", "clean", nil},
 	{"purge", "Remove rebuildable developer artifacts (node_modules, target, ...)", "Phase 7", "clean", nil},
 	{"analyze", "Explore disk usage interactively and find large files", "Phase 4", "analyze", nil},

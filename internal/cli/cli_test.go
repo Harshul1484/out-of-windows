@@ -335,7 +335,7 @@ func TestMalformedConfigBlocksClean(t *testing.T) {
 
 func TestPlannedCommandsExitCode(t *testing.T) {
 	e := newEnv(t)
-	for _, c := range []string{"uninstall", "analyze", "status", "doctor"} {
+	for _, c := range []string{"analyze", "status", "doctor", "purge"} {
 		_, errOut, code := e.run(c, "--some-flag")
 		if code != cli.ExitNotImplemented || !strings.Contains(errOut, "planned for Phase") {
 			t.Errorf("%s: code=%d err=%q", c, code, errOut)

@@ -63,8 +63,19 @@ func Relaunch(args []string) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	verb, _ := windows.UTF16PtrFromString("runas")
-	file, err := windows.UTF16PtrFromString(exe)
+	return RunWait(exe, args, "runas")
+}
+
+// RunWait starts file with args through the Shell and waits for the started
+// process. verb "runas" requests elevation; "" lets the program's own
+// manifest decide (uninstallers that need administrator rights then show the
+// standard UAC prompt).
+func RunWait(fileName string, args []string, verbName string) (uint32, error) {
+	var verb *uint16
+	if verbName != "" {
+		verb, _ = windows.UTF16PtrFromString(verbName)
+	}
+	file, err := windows.UTF16PtrFromString(fileName)
 	if err != nil {
 		return 0, err
 	}

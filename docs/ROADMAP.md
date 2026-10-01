@@ -34,11 +34,21 @@ before the next begins.
 - Deferred to Phase 6 (`optimize`, owner APIs only): Delivery Optimization, Windows Update
   download cache, component store
 
-## Phase 3 — Uninstaller
+## Phase 3 — Uninstaller ✅
 
-- [ ] App discovery: registry (HKLM/HKCU, 32/64-bit), MSI, AppX/MSIX, winget, Scoop, Chocolatey
-- [ ] Native uninstaller execution, wait, verify removal
-- [ ] Leftover detection with multiple signals and confidence levels (`oow leftovers`)
+- [x] App discovery: Uninstall registry keys (64-bit, 32-bit, per-user; MSI and EXE),
+      Microsoft Store / MSIX, Scoop, Chocolatey; package manager detection (winget, scoop, choco)
+- [x] Searchable, sortable, multi-select app picker; `--list`, `--json`, name or `--id` selection
+- [x] Native uninstall: `msiexec /x`, registered (quiet) uninstall commands, `Remove-AppxPackage`,
+      `scoop uninstall`, `choco uninstall`; UAC only when the uninstaller needs it
+- [x] Wait for hand-off uninstallers, verify the app is gone (fail closed), detect cancel and
+      restart-required codes
+- [x] Leftover detection with evidence and confidence (install folder, exact names, publisher
+      folders, executables) and claims (installed apps, processes, services, startup entries)
+- [x] `oow leftovers`: evidence from oow history, broken uninstall entries and Windows usage traces
+- [x] Leftovers to the Recycle Bin, identity-verified; admin-only locations via an elevated window
+- winget is detected but not required: for apps it can see, winget runs the same registered
+  uninstaller that oow runs directly
 
 ## Phase 4 — Disk analyzer
 

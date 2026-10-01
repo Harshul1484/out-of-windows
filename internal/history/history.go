@@ -28,6 +28,21 @@ type Record struct {
 	Cancelled  bool         `json:"cancelled,omitempty"`
 	DurationMS int64        `json:"duration_ms"`
 	Targets    []TargetStat `json:"targets,omitempty"`
+	// Recycled is the size of items moved to the Recycle Bin (recoverable
+	// until it is emptied), as opposed to Reclaimed, which was deleted.
+	Recycled int64 `json:"recycled_bytes,omitempty"`
+	// Apps lists applications uninstalled in this operation. Later leftover
+	// scans use them as evidence of what used to be installed.
+	Apps []AppIdentity `json:"apps,omitempty"`
+}
+
+// AppIdentity records an uninstalled application.
+type AppIdentity struct {
+	Name            string   `json:"name"`
+	Version         string   `json:"version,omitempty"`
+	Publisher       string   `json:"publisher,omitempty"`
+	InstallLocation string   `json:"install_location,omitempty"`
+	Exes            []string `json:"exes,omitempty"`
 }
 
 // TargetStat is the per-target breakdown of a record (a rule, an app, ...).

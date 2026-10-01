@@ -160,6 +160,11 @@ func Seed(root string) error {
 		}
 	}
 
+	// Installed apps, their simulated uninstallers and usage traces.
+	if err := seedApps(root, l); err != nil {
+		return err
+	}
+
 	// Junctions that cleanup must never follow: one inside Temp, and a fake
 	// browser "profile" that points at Documents.
 	for link, target := range map[string]string{

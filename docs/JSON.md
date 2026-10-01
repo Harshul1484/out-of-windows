@@ -95,7 +95,82 @@ default (`--all` selects every ready target). Real deletion requires `--yes`.
 ```
 
 Newest first. `sandbox: true` marks runs made in sandbox mode; `cancelled: true` marks runs
-stopped with Ctrl+C.
+stopped with Ctrl+C. `recycled_bytes` is what was moved to the Recycle Bin (as opposed to
+`reclaimed_bytes`, which was deleted). Uninstall records carry
+`apps: [{"name", "version", "publisher", "install_location", "exes"}]`, which later leftover
+scans use as evidence.
+
+## `oow uninstall --list --json` — `oow.apps/v1`
+
+```json
+{
+  "schema": "oow.apps/v1",
+  "apps": [
+    {
+      "id": "reg:hklm64:ContosoStudio", "name": "Contoso Studio", "version": "4.2.0",
+      "publisher": "Contoso Ltd.", "source": "exe", "scope": "machine",
+      "install_location": "C:\\Program Files\\Contoso\\Studio", "size_bytes": 7900000,
+      "uninstall_string": "\"C:\\Program Files\\Contoso\\Studio\\uninstall.exe\" /S",
+      "registry_key": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ContosoStudio",
+      "problems": []
+    }
+  ],
+  "package_managers": { "winget": "C:\\...\\winget.exe" },
+  "warnings": []
+}
+```
+
+- `source`: `msi`, `exe`, `appx`, `scoop`, `choco`. `scope`: `machine` or `user`.
+- `id` is stable for a given installation and is what `--id` accepts. Prefixes: `reg:hklm64:`,
+  `reg:hklm32:`, `reg:hkcu:` (followed by the Uninstall key name), `appx:<PackageFullName>`,
+  `scoop:<scope>:<name>`, `choco:<id>`.
+- `problems`: why the app cannot be uninstalled normally; the first entry
+  `its uninstaller is missing` marks a broken entry.
+- `size_bytes` is the size the installer registered (0 when unknown).
+
+## `oow uninstall --json` — `oow.uninstall/v1`
+
+`{"schema", "dry_run", "sandbox", "results": [...]}`, one result per app:
+
+| Field | Meaning |
+|---|---|
+| `app` | the app, as in `oow.apps/v1` |
+| `plan` | `{"method", "exe", "args", "command", "elevate", "quiet", "notes"}`: exactly what runs |
+| `outcome` | `{"started", "exit_code", "removed", "restart_required", "message"}` (absent in dry runs) |
+| `leftovers` | `{"candidates": [...], "kept": [...]}` as in `oow.leftovers/v1` |
+| `recycled` | `{"recycled": [...], "bytes", "skipped": [{"path", "reason"}], "errors"}` |
+| `error` | why this app was not uninstalled |
+
+In a dry run `leftovers` lists folders related to the app *now*; after a real uninstall it lists
+what was actually left. With `--yes`, only `high` confidence leftovers are moved.
+
+## `oow leftovers --json` — `oow.leftovers/v1`
+
+```json
+{
+  "schema": "oow.leftovers/v1", "dry_run": true, "sandbox": false, "elevated": false,
+  "evidence": [
+    { "name": "Old Editor", "publisher": "Proseware", "install_location": "C:\\Program Files\\OldEditor",
+      "exes": ["oldeditor.exe"], "source": "usage-trace" }
+  ],
+  "result": {
+    "candidates": [
+      { "path": "C:\\Program Files\\OldEditor", "app": "Old Editor", "source": "usage-trace",
+        "location": "program files", "confidence": "medium",
+        "reasons": ["Old Editor ran from this folder; its program file is gone"],
+        "bytes": 1500000, "files": 1, "newest_change": "2026-03-16T10:00:00Z", "needs_admin": true }
+    ],
+    "kept": [ { "path": "...", "app": "Wingtip Toys", "reason": "still used by Wingtip Toys" } ]
+  }
+}
+```
+
+After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`.
+
+- `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`.
+- `confidence`: `high` (registered install folder, or two or more independent signals) or
+  `medium` (a single exact-name signal, and everything based on usage traces).
+- `needs_admin`: the folder is in Program Files or ProgramData and `oow` is not elevated.
 
 ## `oow config --json` — `oow.config/v1`
 

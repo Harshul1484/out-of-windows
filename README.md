@@ -41,7 +41,7 @@ say so and exit with code 3.
 | `oow clean` | Temp files, browser/app/developer caches, logs, Recycle Bin | ✅ |
 | `oow config` | Settings, whitelist, list of protected locations | ✅ |
 | `oow history` | What previous runs removed | ✅ |
-| `oow uninstall` / `leftovers` | Complete uninstall + orphaned app data | Phase 3 |
+| `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin | ✅ |
 | `oow analyze` | Interactive disk explorer, large files | Phase 4 |
 | `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard | Phase 5 |
 | `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
@@ -74,6 +74,10 @@ oow clean --rule temp.user --yes      # non-interactive, one target
 oow clean --dry-run --json            # machine-readable preview
 oow config whitelist add "D:\keep-this" windows.directx-shader-cache
 oow config protected     # every location the safety layer protects
+oow uninstall            # pick apps, run their uninstallers, review leftovers
+oow uninstall --list     # every installed app (registry, Store, Scoop, Chocolatey)
+oow uninstall "Contoso Studio" --dry-run   # what would run and what is related
+oow leftovers --dry-run  # folders left behind by apps that are gone
 oow history              # what was removed and when
 ```
 
@@ -95,6 +99,22 @@ Run `oow clean --list` for every target with its what / why-safe / afterwards ex
 
 Opt-in targets are listed but unselected by default. Admin-only targets are skipped unless
 you run elevated; interactively, `oow clean` offers to clean them in an elevated window.
+
+### How `oow uninstall` works
+
+1. Finds apps installed through Windows Installer, regular installers (64-bit, 32-bit and
+   per-user), the Microsoft Store, Scoop and Chocolatey, and lets you search and pick.
+2. Shows exactly which uninstaller will run, then runs **the app's own uninstaller** (never just
+   deleting its folder), waits for it, and verifies the app is really gone.
+3. Lists folders the app left behind, each with its evidence and a confidence level: the
+   install folder the app registered, folders with its exact name, its publisher's folders,
+   folders containing its program. Similar-looking names are never enough, and folders still
+   used by installed apps, running programs, services or startup entries are kept.
+4. Moves the leftovers you confirm to the **Recycle Bin**, so they can be restored.
+
+`oow leftovers` finds the same kind of folders for apps removed earlier: ones `oow`
+uninstalled, ones still listed but whose program files are gone, and programs Windows
+remembers running whose files no longer exist.
 
 ## How it keeps your data safe
 
