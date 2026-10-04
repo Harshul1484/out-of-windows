@@ -30,23 +30,23 @@ Installer, AppX, winget, and Windows-specific caches.
 ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-## Status
+## Commands
 
-`oow` is being built in phases ([roadmap](docs/ROADMAP.md)). Commands not yet available
-say so and exit with code 3.
+| Command | What it does |
+|---|---|
+| `oow` | Interactive home screen with live CPU, memory and disk |
+| `oow clean` | Temp files, browser/app/developer caches, logs, Recycle Bin |
+| `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin |
+| `oow analyze` | Interactive disk explorer, large files, Recycle Bin deletion |
+| `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard, process list |
+| `oow optimize` / `doctor` / `startup` / `repair` | Bounded maintenance, diagnostics, startup apps |
+| `oow purge` / `installer` | Developer artifacts, unused installers |
+| `oow update` / `remove` | Self-update and self-removal |
+| `oow config` / `history` | Settings and whitelist; what previous runs removed |
 
-| Command | What it does | Status |
-|---|---|---|
-| `oow` | Interactive home screen with live CPU, memory and disk | ✅ |
-| `oow clean` | Temp files, browser/app/developer caches, logs, Recycle Bin | ✅ |
-| `oow config` | Settings, whitelist, list of protected locations | ✅ |
-| `oow history` | What previous runs removed | ✅ |
-| `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin | ✅ |
-| `oow analyze` | Interactive disk explorer, large files, Recycle Bin deletion | ✅ |
-| `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard, process list | ✅ |
-| `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
-| `oow purge` / `installer` | Developer artifacts, unused installers | Phase 7 |
-| `oow update` / `remove` | Self-update and self-removal | Phase 8 |
+Progress is tracked on the [project board](https://github.com/users/Harshul1484/projects/6);
+the [roadmap](docs/ROADMAP.md) describes each phase. Commands that are not available yet say
+so and exit with code 3.
 
 ## Install
 
