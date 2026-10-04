@@ -62,11 +62,15 @@ before the next begins.
 - Not planned: raw MFT reading (needs administrator rights and raw volume access); hard links
   are counted per link
 
-## Phase 5 — Monitoring
+## Phase 5 — Monitoring ✅
 
-- [ ] `oow status`: CPU (per core), GPU (NVIDIA/AMD/Intel where available), memory, disk I/O,
-      network, top processes; `--json`, `--watch`
-- [ ] `oow processes`
+- [x] `oow status`: live dashboard with CPU (total, per core, frequency), memory (used, commit,
+      cache), GPU (utilization and memory from performance counters; NVIDIA temperature via
+      `nvidia-smi`), disk activity and throughput, volumes, network rates and session totals,
+      top processes; `--json` snapshot and `--json --watch` NDJSON stream
+- [x] `oow processes`: CPU, private memory, I/O and threads per process, sort and filter
+- [x] Native sources only (kernel process table, PDH English counter names, Known APIs);
+      unavailable metrics are reported as unavailable, never estimated
 
 ## Phase 6 — Optimize, doctor, startup
 

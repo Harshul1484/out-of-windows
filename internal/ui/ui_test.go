@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Harshul1484/out-of-windows/internal/monitor"
 )
 
 func TestBytes(t *testing.T) {
@@ -164,6 +166,38 @@ func TestPickerViewShowsNotes(t *testing.T) {
 		if !strings.Contains(v, want) {
 			t.Errorf("view missing %q:\n%s", want, v)
 		}
+	}
+}
+
+func TestSparkline(t *testing.T) {
+	if got := Sparkline([]float64{0, 50, 100, 150, -5}); got != "▁▄██▁" {
+		t.Errorf("Sparkline = %q", got)
+	}
+}
+
+func TestStatusModel(t *testing.T) {
+	Init("never", true)
+	snaps := 0
+	m := NewStatusModel(StatusOptions{OS: "Windows 11", Interval: time.Second, Sample: func() (monitor.Snapshot, error) {
+		snaps++
+		return monitor.Snapshot{Time: time.Unix(int64(snaps), 0), CPU: 42, Cores: []float64{10, 90}, MemTotal: 16 << 30, MemUsed: 8 << 30,
+			NetRecv: 1000, DiskActive: -1, Processes: []monitor.Process{{PID: 7, Name: "busy.exe", CPU: 40, Memory: 1 << 20}}}, nil
+	}})
+	if !strings.Contains(m.View(), "Measuring") {
+		t.Error("no placeholder before the first sample")
+	}
+	msg := m.Init()()
+	m, _ = m.Update(msg)
+	m, _ = m.Update(m.(*status).sample()())
+	v := m.View()
+	for _, want := range []string{"SYSTEM STATUS", "42%", "busy.exe", "GPU", "not available", "this session ↓ 1000 B"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view missing %q:\n%s", want, v)
+		}
+	}
+	m = press(m, "c", "p")
+	if v := m.View(); !strings.Contains(v, "by memory") || !strings.Contains(v, " 90%") {
+		t.Errorf("toggles not applied:\n%s", v)
 	}
 }
 

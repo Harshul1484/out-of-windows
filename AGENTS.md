@@ -104,6 +104,9 @@ arrives.
   verification through a `Checker`.
 - `internal/leftovers/`: evidence (uninstalled, history, broken entries, usage traces), claims
   (installed apps, processes, services, startup), `Find` with confidence, `Recycle`.
+- `internal/monitor/`: read-only metrics. `Source` (real: kernel process table, per-core times,
+  PDH English counters, `nvidia-smi`; sandbox: `sandbox.Monitor`) and `Compute` (rates from two
+  readings). The dashboard is `internal/ui/status.go`.
 - `internal/analyzer/`: parallel read-only scanner (folder tree, largest-files heap), on-demand
   file listing. The explorer TUI is `internal/ui/explorer.go`; deletion goes through
   `App.recyclePaths` (guard user-selected purpose + verified recycle).

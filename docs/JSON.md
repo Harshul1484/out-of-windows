@@ -207,6 +207,42 @@ After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1
 `{"schema", "root", "min_size", "files": [{"path", "size", "modified"}], "scan_errors", "duration_ms"}`,
 largest first, filtered by `--min-size`, at most `--top` entries.
 
+## `oow status --json` — `oow.status/v1`
+
+```json
+{
+  "schema": "oow.status/v1",
+  "time": "2026-10-05T12:00:02Z",
+  "cpu": { "percent": 35, "cores_percent": [80, 20, 20, 20], "frequency_mhz": 3400, "max_frequency_mhz": 3800 },
+  "memory": { "total_bytes": 17179869184, "used_bytes": 10737418240, "available_bytes": 6442450944,
+              "used_percent": 62.5, "commit_used_bytes": 15032385536, "commit_limit_bytes": 25769803776,
+              "cached_bytes": 3221225472 },
+  "disk": { "read_bytes_per_sec": 12582912, "write_bytes_per_sec": 3145728, "active_percent": 28,
+            "volumes": [ { "root": "C:\\", "total_bytes": 1073741824000, "free_bytes": 268435456000 } ] },
+  "network": { "recv_bytes_per_sec": 18874368, "sent_bytes_per_sec": 2097152,
+               "interfaces": [ { "name": "Ethernet", "recv_bytes_per_sec": 18874368, "sent_bytes_per_sec": 2097152 } ] },
+  "gpus": [ { "name": "NVIDIA GeForce RTX 3060", "utilization_percent": 39, "memory_used_bytes": 2147483648,
+              "memory_total_bytes": 12884901888, "temperature_c": 61 } ],
+  "processes": { "count": 214, "threads": 3120, "handles": 98000,
+                 "top_by_cpu": [ { "pid": 1200, "ppid": 4, "name": "compiler.exe", "cpu_percent": 20,
+                                   "memory_bytes": 943718400, "io_bytes_per_sec": 20971520, "threads": 12, "handles": 300 } ] },
+  "uptime_seconds": 273600
+}
+```
+
+- Rates are measured over `--interval` (default 1 s) between two readings.
+- Process `cpu_percent` is a share of all logical processors (one busy core of eight is 12.5%),
+  as in Task Manager. `memory_bytes` is the private working set.
+- `active_percent` is `-1` and GPU `utilization_percent` / `temperature_c` are `-1` when
+  Windows does not provide them; `gpus` may be empty.
+- `--watch` prints one such object per line (NDJSON) every `--interval` until Ctrl+C or
+  `--count` objects.
+
+## `oow processes --json` — `oow.processes/v1`
+
+`{"schema", "time", "sort", "total", "processes": [...]}` with process objects as in
+`top_by_cpu` above, sorted by `--sort` (`cpu`, `memory`, `io`, `name`) and limited by `--top`.
+
 ## `oow config --json` — `oow.config/v1`
 
 `{"schema", "config_file", "data_dir", "sandbox", "config": {"version", "whitelist":

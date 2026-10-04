@@ -43,7 +43,7 @@ say so and exit with code 3.
 | `oow history` | What previous runs removed | ✅ |
 | `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin | ✅ |
 | `oow analyze` | Interactive disk explorer, large files, Recycle Bin deletion | ✅ |
-| `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard | Phase 5 |
+| `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard, process list | ✅ |
 | `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
 | `oow purge` / `installer` | Developer artifacts, unused installers | Phase 7 |
 | `oow update` / `remove` | Self-update and self-removal | Phase 8 |
@@ -81,6 +81,9 @@ oow leftovers --dry-run  # folders left behind by apps that are gone
 oow analyze              # pick a drive and explore it (enter, backspace, s, f, /, L, d, o, r)
 oow analyze --large --min-size 1GB         # largest files
 oow analyze D:\Projects --json --depth 2   # machine-readable breakdown
+oow status               # live dashboard (c: per-core view, p: process sort, q: quit)
+oow status --json --watch --interval 5s    # NDJSON stream for scripts
+oow processes --sort memory --top 10
 oow history              # what was removed and when
 ```
 

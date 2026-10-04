@@ -333,9 +333,17 @@ func TestMalformedConfigBlocksClean(t *testing.T) {
 	}
 }
 
+// Every command still marked "coming in" in --help must exit with
+// ExitNotImplemented and say when it is planned, whatever flags it gets.
 func TestPlannedCommandsExitCode(t *testing.T) {
 	e := newEnv(t)
-	for _, c := range []string{"status", "doctor", "purge", "installer"} {
+	help, _, _ := e.run("--help")
+	for _, line := range strings.Split(help, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 || !strings.Contains(line, "(coming in") {
+			continue
+		}
+		c := f[0]
 		_, errOut, code := e.run(c, "--some-flag")
 		if code != cli.ExitNotImplemented || !strings.Contains(errOut, "planned for Phase") {
 			t.Errorf("%s: code=%d err=%q", c, code, errOut)

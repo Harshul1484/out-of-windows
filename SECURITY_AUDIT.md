@@ -1,6 +1,6 @@
 # Security Audit
 
-Status: **v0.1.0-dev (Phases 1–4)**. This document records what the code does today. Planned
+Status: **v0.1.0-dev (Phases 1–5)**. This document records what the code does today. Planned
 controls are listed separately under *Known limitations and future work*; nothing in the
 other sections is aspirational. Update this file in the same change as any safety-relevant
 code.
@@ -184,6 +184,14 @@ key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlit
   critical, protected and sensitive locations are refused; user content is allowed) and is
   then moved to the Recycle Bin through the verified recycle sink (`filesystem.Verify`, fixed
   drives only). There is no permanent delete in the analyzer. Every move is recorded in history.
+
+### Monitoring
+
+`status` and `processes` are read-only. Process data comes from one
+`NtQuerySystemInformation(SystemProcessInformation)` call (no process handles are opened);
+disk, network and GPU rates from PDH counters added by English name; GPU names from the
+display-adapter registry key; NVIDIA details by running `nvidia-smi` (hidden window, 2 s
+timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
 
 ### Tool-owned and whitelisted locations
 
