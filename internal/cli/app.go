@@ -145,6 +145,7 @@ func (a *App) setup() error {
 	a.Guard = safety.NewGuard(a.Locations, protected)
 	ui.Init(color, a.NoColor || a.JSON)
 	a.closeLog = logging.Setup(a.Dirs.LogDir(), a.Debug, a.Err)
+	a.cleanupOldExe()
 	return nil
 }
 
@@ -159,7 +160,9 @@ func (a *App) requireConfig() error {
 
 func (a *App) close() {
 	if a.closeLog != nil {
-		if err := a.closeLog(); err != nil {
+		closeLog := a.closeLog
+		a.closeLog = nil // closing twice would report a spurious error
+		if err := closeLog(); err != nil {
 			fmt.Fprintf(a.Err, "warning: could not write the log file: %v\n", err)
 		}
 	}

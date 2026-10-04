@@ -53,6 +53,12 @@ const (
 	// most three levels below it and outside Windows-owned and shared
 	// folders. Leftovers go to the Recycle Bin.
 	PurposeLeftover
+	// PurposeSelfRemove is the tool's own configuration or data directory,
+	// moved to the Recycle Bin when the user removes the tool. Only exactly
+	// one of Locations.SelfDirs is allowed (never a parent or a child), and
+	// only when it is not critical, whitelisted, sensitive, in a system tree
+	// or in user content.
+	PurposeSelfRemove
 )
 
 // LeftoverRoot is a location where applications keep their files.
@@ -119,6 +125,8 @@ type Guard struct {
 	userContent []location
 	exemptions  []location // system subtrees that rules may clean inside
 	protected   []location // whitelist + this tool's own directories
+	self        []location // this tool's own directories only
+	whitelist   []location // the user's whitelist only
 	sensitive   []location // credentials, keys, wallets, VM and AI-tool state
 	leftover    []LeftoverRoot
 	windowsDir  string
@@ -379,11 +387,42 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 
 	for _, p := range locs.SelfDirs {
 		g.protected = appendLoc(g.protected, p, "used by "+toolDirLabel, false)
+		g.self = appendLoc(g.self, p, "used by "+toolDirLabel, false)
 	}
 	for _, p := range userProtected {
 		g.protected = appendLoc(g.protected, p, "in your whitelist", false)
+		g.whitelist = appendLoc(g.whitelist, p, "in your whitelist", false)
 	}
 	return g
+}
+
+// checkSelfRemove allows exactly one of the tool's own directories and
+// nothing else. Critical locations were already refused by Check.
+func (g *Guard) checkSelfRemove(p string) Decision {
+	own := false
+	for _, s := range g.self {
+		own = own || Key(s.path) == Key(p)
+	}
+	if !own {
+		return deny(ClassOrdinary, "%s is not one of %s's own folders", p, toolDirLabel)
+	}
+	for _, w := range g.whitelist {
+		if IsWithin(p, w.path) || IsWithin(w.path, p) {
+			return deny(ClassProtected, "protected: %s is %s", w.path, w.label)
+		}
+	}
+	for _, s := range g.sensitive {
+		if IsWithin(p, s.path) || IsWithin(s.path, p) {
+			return deny(ClassSensitive, "sensitive: %s holds %s", s.path, s.label)
+		}
+	}
+	if s, ok := g.containing(g.system, p); ok {
+		return deny(ClassSystem, "%s is inside the %s", p, s.label)
+	}
+	if u, ok := g.containing(g.userContent, p); ok {
+		return deny(ClassUserContent, "%s is inside your %s (%s)", p, u.label, u.path)
+	}
+	return Decision{Allowed: true, Class: ClassProtected}
 }
 
 const toolDirLabel = "this tool"
@@ -425,6 +464,9 @@ func (g *Guard) Check(req Request) Decision {
 			}
 			return deny(ClassCritical, "%s contains the %s (%s)", p, c.label, c.path)
 		}
+	}
+	if req.Purpose == PurposeSelfRemove {
+		return g.checkSelfRemove(p)
 	}
 	for _, w := range g.protected {
 		if IsWithin(p, w.path) || IsWithin(w.path, p) {

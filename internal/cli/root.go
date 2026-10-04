@@ -115,6 +115,8 @@ func newRootCmd(app *App) *cobra.Command {
 		newProcessesCmd(app),
 		newConfigCmd(app),
 		newHistoryCmd(app),
+		newUpdateCmd(app),
+		newRemoveCmd(app),
 		newVersionCmd(app),
 		newSandboxCmd(app),
 	)
@@ -206,8 +208,6 @@ var plannedCommands = []planned{
 	{"startup", "Review and disable startup applications", "Phase 6", "system", nil},
 	{"doctor", "Diagnose common Windows problems", "Phase 6", "system", nil},
 	{"repair", "Guided repair for problems found by doctor", "Phase 6", "system", nil},
-	{"update", "Update " + buildinfo.Name + " to the latest release", "Phase 8", "tool", nil},
-	{"remove", "Uninstall " + buildinfo.Name + " itself", "Phase 8", "tool", nil},
 }
 
 func newPlannedCmd(app *App, p planned) *cobra.Command {

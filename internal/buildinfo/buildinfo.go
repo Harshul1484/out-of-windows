@@ -26,6 +26,10 @@ var (
 	Version = "0.1.0-dev"
 	Commit  = "none"
 	Date    = "unknown"
+
+	// Repo is the GitHub repository ("owner/name") whose releases `update`
+	// installs from. A fork or a renamed project overrides it with ldflags.
+	Repo = "Harshul1484/out-of-windows"
 )
 
 // String returns a single-line version description.
