@@ -185,20 +185,15 @@ Write-Host '::group::leftovers scan (read-only)'
 if ($LASTEXITCODE -ne 0) { throw "leftovers dry run exited $LASTEXITCODE" }
 Write-Host '::endgroup::'
 
-Write-Host '::group::analyze (read-only) and scan-speed diagnostic'
-# Baseline: how long does the OS itself take to enumerate C:\ (cold cache)?
+Write-Host '::group::analyze (read-only)'
+# A full cold C:\ scan is bound by the VM's disk (Windows' own `dir /s` took
+# ~575 s there, oow ~19 s warm), so CI measures a large folder instead.
 $sw = [Diagnostics.Stopwatch]::StartNew()
-cmd /c "dir /s /a /-c C:\ > nul 2>&1"
+$an = & $Oow analyze $env:ProgramFiles --json --top 5 | ConvertFrom-Json
 $sw.Stop()
-Write-Host ("baseline: dir /s C:\ (cold) took {0:n1}s" -f $sw.Elapsed.TotalSeconds)
-foreach ($pass in 'warm 1', 'warm 2') {
-  $sw = [Diagnostics.Stopwatch]::StartNew()
-  $an = & $Oow analyze C:\ --json --top 5 | ConvertFrom-Json
-  $sw.Stop()
-  if ($LASTEXITCODE -ne 0 -or $an.schema -ne 'oow.analyze/v1' -or $an.root.size -le 0) { throw 'analyze C:\ failed' }
-  Write-Host ("oow analyze C:\ ({0}) took {1:n1}s: {2:n1} GB in {3:n0} files; {4} unreadable folders; {5} links not followed" -f `
-      $pass, $sw.Elapsed.TotalSeconds, ($an.root.size / 1GB), $an.root.files, $an.scan_errors, $an.links)
-}
+if ($LASTEXITCODE -ne 0 -or $an.schema -ne 'oow.analyze/v1' -or $an.root.size -le 0) { throw 'analyze failed' }
+Write-Host ("oow analyze {0} took {1:n1}s: {2:n1} GB in {3:n0} files; {4} unreadable folders; {5} links not followed" -f `
+    $env:ProgramFiles, $sw.Elapsed.TotalSeconds, ($an.root.size / 1GB), $an.root.files, $an.scan_errors, $an.links)
 $an.root.children | Select-Object -First 8 name, @{n = 'GB'; e = { '{0:n2}' -f ($_.size / 1GB) } } | Format-Table | Out-String | Write-Host
 $lg = & $Oow analyze $env:USERPROFILE --large --min-size 1MB --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $lg.schema -ne 'oow.large/v1') { throw 'analyze --large failed' }

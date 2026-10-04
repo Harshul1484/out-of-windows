@@ -159,7 +159,10 @@ func Scan(ctx context.Context, root string, opts Options, prog *Progress) (*Resu
 		opts.TopFiles = 200
 	}
 	if opts.Workers == 0 {
-		opts.Workers = max(4, runtime.NumCPU()*2)
+		// Directory reads are I/O-bound: on slow (cold, network-attached or
+		// spinning) disks more requests in flight help, and on fast disks 16
+		// concurrent reads measured about twice as fast as 8 (bench_test.go).
+		opts.Workers = max(16, runtime.NumCPU()*2)
 	}
 	if prog == nil {
 		prog = &Progress{}
