@@ -166,7 +166,7 @@ func printChecks(app *App, checks []doctor.Check) {
 			last = c.Category
 		}
 		app.printf("   %s %s %s\n", ui.PadRight(checkMark(c.Status), 11), ui.PadRight(ui.TruncateMiddle(c.Title, titleW), titleW),
-			wrapRender(plain, c.Summary, width-len(summaryIndent), summaryIndent))
+			wrapRender(plain, c.Summary, width-len(summaryIndent), summaryIndent, true))
 		if c.Status == doctor.OK {
 			continue
 		}
@@ -177,12 +177,12 @@ func printChecks(app *App, checks []doctor.Check) {
 					app.printf("%s%s\n", indent, ui.Muted.Render(fmt.Sprintf("… and %d more (--json lists all)", len(c.Details)-shown)))
 					break
 				}
-				app.printf("%s%s\n", indent, wrapRender(ui.Muted.Render, d, width-len(indent)-1, indent))
+				app.printf("%s%s\n", indent, wrapRender(ui.Muted.Render, d, width-len(indent)-1, indent, true))
 				shown++
 			}
 		}
 		if c.Next != "" {
-			app.printf("%s%s %s\n", indent, ui.Accent.Render("→"), wrapRender(plain, c.Next, width-len(indent)-3, indent+"  "))
+			app.printf("%s%s %s\n", indent, ui.Accent.Render("→"), wrapRender(plain, c.Next, width-len(indent)-3, indent+"  ", false))
 		}
 	}
 	app.println()
@@ -190,9 +190,13 @@ func printChecks(app *App, checks []doctor.Check) {
 
 // wrapRender wraps s to width and renders each line separately (a style
 // applied to several lines would pad them into a block). Words longer than a
-// line, such as paths, are shortened in the middle.
-func wrapRender(render func(...string) string, s string, width int, indent string) string {
-	if strings.Contains(s, `:\`) || strings.Contains(s, `\\`) {
+// line, such as paths, are shortened in the middle. With pathLine, a line
+// naming a path stays one line instead (summaries and details: "missing:
+// C:\Program Files\x" must not split at its spaces); advice sentences pass
+// false, so a command in them such as `oow analyze D:\` never cuts the
+// sentence short.
+func wrapRender(render func(...string) string, s string, width int, indent string, pathLine bool) string {
+	if pathLine && (strings.Contains(s, `:\`) || strings.Contains(s, `\\`)) {
 		// A line naming a path stays one line, shortened in the middle, so
 		// the path is not split at its spaces.
 		return render(ui.TruncateMiddle(s, max(width, 20)))
