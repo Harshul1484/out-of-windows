@@ -1,0 +1,24 @@
+{
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": "oow.manifest"
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "info": {
+          "0409": {
+            "Comments": "https://github.com/Harshul1484/out-of-windows",
+            "CompanyName": "Harshul1484",
+            "FileDescription": "out-of-windows system maintenance CLI",
+            "InternalName": "oow",
+            "LegalCopyright": "Copyright (c) 2026 Harshul1484. MIT License.",
+            "OriginalFilename": "oow.exe",
+            "ProductName": "out-of-windows"
+          }
+        }
+      }
+    }
+  }
+}

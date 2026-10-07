@@ -2,5 +2,6 @@
 # including Windows CI runners that default to core.autocrlf=true.
 * text=auto eol=lf
 *.exe binary
+*.syso binary
 *.png binary
 *.gif binary
