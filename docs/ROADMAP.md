@@ -44,8 +44,11 @@ before the next begins.
 - [x] Wait for hand-off uninstallers, verify the app is gone (fail closed), detect cancel and
       restart-required codes
 - [x] Leftover detection with evidence and confidence (install folder, exact names, publisher
-      folders, executables) and claims (installed apps, processes, services, startup entries)
-- [x] `oow leftovers`: evidence from oow history, broken uninstall entries and Windows usage traces
+      folders, executables) and claims (installed apps, processes, services, startup entries,
+      scheduled tasks)
+- [x] `oow leftovers`: evidence from oow history, broken uninstall entries, Windows usage traces
+      and broken Start menu and Desktop shortcuts (exact folder only; the user's own broken
+      shortcuts go to the Recycle Bin with their leftover)
 - [x] Leftovers to the Recycle Bin, identity-verified; admin-only locations via an elevated window
 - winget is detected but not required: for apps it can see, winget runs the same registered
   uninstaller that oow runs directly
@@ -77,7 +80,9 @@ before the next begins.
 - [x] `oow startup`: Run and RunOnce values (HKCU, HKLM 64- and 32-bit), user and common Startup
       folders with `.lnk` targets resolved; enabled/disabled state and broken programs; interactive
       toggle and `startup enable|disable` through StartupApproved, like Task Manager (reversible,
-      entries never deleted; machine-wide entries need administrator rights)
+      entries never deleted; machine-wide entries need administrator rights); scheduled tasks with
+      sign-in or startup triggers (Task Scheduler COM API, Windows' own tasks left out), switched
+      through the task's Enabled flag
 - [x] `oow doctor`: free space per fixed drive, pending restart, Windows Update service and policy,
       user and system PATH, broken startup entries, reclaimable caches, network configuration
       (local only), folder permissions, package managers; diagnose only, with next steps
@@ -88,8 +93,7 @@ before the next begins.
       startup entries; the system PATH is reported, never changed
 - Not planned: winsock or network stack resets, restarting Explorer, Windows Update cache
   deletion, registry tweaks
-- Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API);
-  the Windows Update download cache and component store through owner tools
+- Later: the Windows Update download cache and component store through owner tools
 
 ## Phase 7 — Developer tools ✅
 

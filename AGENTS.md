@@ -111,17 +111,24 @@ arrives.
   file class IDs, MSIX manifests, PE setup-engine data, ZIP roots, ISO roots),
   `native_windows.go` (version resources, MSI properties, Known Folders), `installer.go`
   (search, exact installed matching, preselection, Recycle Bin).
-- `internal/leftovers/`: evidence (uninstalled, history, broken entries, usage traces), claims
-  (installed apps, processes, services, startup), `Find` with confidence, `Recycle`.
+- `internal/leftovers/`: evidence (uninstalled, history, broken entries, usage traces, broken
+  Start menu and Desktop shortcuts in `shortcuts.go`), claims (installed apps, processes,
+  services, startup, scheduled tasks), `Find` with confidence, `Recycle` (a leftover's broken
+  shortcuts follow it under `PurposeShortcut`).
 - `internal/monitor/`: read-only metrics. `Source` (real: kernel process table, per-core times,
   PDH English counters, `nvidia-smi`; sandbox: `sandbox.Monitor`) and `Compute` (rates from two
   readings). The dashboard is `internal/ui/status.go`.
 - `internal/analyzer/`: parallel read-only scanner (folder tree, largest-files heap), on-demand
   file listing. The explorer TUI is `internal/ui/explorer.go`; deletion goes through
   `App.recyclePaths` (guard user-selected purpose + verified recycle).
-- `internal/startup/`: startup entries (Run/RunOnce values, Startup folders, `.lnk` parser),
-  target resolution (`found`/`missing`/`unknown`), and enable/disable through StartupApproved
-  values only (`SetEnabled`, verified). Real store `System`; sandbox `sandbox.Startup`.
+- `internal/startup/`: startup entries (Run/RunOnce values, Startup folders, `.lnk` parser,
+  scheduled tasks with sign-in or startup triggers), target resolution
+  (`found`/`missing`/`unknown`), and enable/disable through StartupApproved values or a task's
+  Enabled flag only (`SetEnabled`, verified). Real store `System`; sandbox `sandbox.Startup`.
+- `internal/tasks/`: scheduled tasks through the Task Scheduler COM API (`ITaskService`, vtable
+  slots from the type library, amd64/arm64 only): read-only listing and XML parsing, and the one
+  write `SetEnabled` (`IRegisteredTask.Enabled`, read back). Sandbox `sandbox.Tasks`
+  (`registry\tasks.json`).
 - `internal/envpath/`: user and machine PATH analysis, exact entry removal, `.reg` backups, and a
   compare-and-swap write of the user PATH only (`Store`; sandbox `sandbox.Paths`).
 - `internal/doctor/`: read-only `Probe` (sandbox `sandbox.Doctor`), `Facts`, and pure `Evaluate`
@@ -251,6 +258,10 @@ These are interfaces users and scripts depend on. Changing them is a compatibili
   the user `Path` value (`repair` of missing, duplicate and empty entries after a `.reg`
   backup; `remove` dropping the installer's entry; the install script adding it). The
   machine `Path` is never written. No "registry cleaning".
+- **Never change scheduled tasks outside the reviewed write.** The only Task Scheduler write is
+  a task's Enabled flag through `IRegisteredTask.Enabled` (`startup enable|disable`, `repair` of
+  broken sign-in tasks), reversed by setting it back, with the previous flag in history. Tasks are
+  never created, edited, run, stopped or deleted; other accounts' tasks need elevation.
 - **Elevation is per operation.** `oow` never requires administrator rights as a whole.
   Admin-only targets are skipped with an explanation when not elevated. Verification and
   tests must never block on a UAC prompt; use the sandbox (elevation is simulated there).

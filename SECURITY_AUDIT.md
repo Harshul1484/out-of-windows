@@ -285,6 +285,22 @@ These commands delete no user files. What each one may change, and how:
   offered). A program is called missing only after a verified "not found" on a fixed drive: bare
   names resolved through PATH, UNC paths, removable or disconnected drives and unreadable
   shortcuts are "unknown", so nothing is offered for repair on a guess.
+- **Scheduled tasks in `startup`.** Tasks are read through `ITaskService` (`CoCreateInstance` of
+  `CLSID_TaskScheduler`, `Connect` as the current user, `GetFolder`/`GetFolders`/`GetTasks` with
+  hidden tasks, `get_Path`, `get_Enabled`, `get_Xml`; vtable slots taken from the type library in
+  `taskschd.dll`, each named, none computed; VARIANTs passed by reference, so only amd64 and arm64
+  builds talk to the Task Scheduler and other architectures report it unsupported). Tasks with
+  an enabled logon trigger (`task-logon`) or boot trigger (`task-boot`) outside `\Microsoft\` are
+  listed. The **only write is `IRegisteredTask.Enabled`** (`put_Enabled`), the flag Task
+  Scheduler's own Disable/Enable sets: the task is looked up again by path immediately before
+  (a deleted task is reported, never recreated), the flag is read back through a fresh object,
+  and the state is verified by listing again; the previous flag is recorded in history
+  (`task_enabled_before`). Tasks are never created, edited, run, stopped or deleted. Only the
+  user's own tasks (run as the user, at the user's sign-in, without highest privileges) are
+  changed without elevation; every other task is skipped with "requires administrator" unless
+  elevated, and an access-denied answer is reported with the same next step. A task of another
+  account whose command uses a per-user variable has an unknown target, so `repair` never
+  disables it on a guess.
 - **Shortcut parsing** (`startup.ParseLink`, MS-SHLLINK; also used for leftover evidence) reads at
   most 1 MiB, bounds-checks every offset and count, and returns an error instead of panicking
   (fuzzed: `FuzzParseLink`). ANSI strings are decoded with the system code page, never guessed.
@@ -309,9 +325,10 @@ These commands delete no user files. What each one may change, and how:
   The value is read back after writing, `WM_SETTINGCHANGE("Environment")` is broadcast with
   `SendMessageTimeout`, and the backup path is recorded in history. The machine PATH is never
   written, only reported. Broken startup entries are disabled through the same StartupApproved
-  path as `oow startup disable`.
+  path as `oow startup disable`, and broken sign-in tasks through the same Enabled flag.
 - **Sandbox mode** replaces every one of these with simulations under `<sandbox>\registry`
-  (startup values, PATH values, system facts, task state); the simulated Delivery Optimization
+  (startup values, the scheduled task library in `tasks.json`, PATH values, system facts, task
+  state); the simulated Delivery Optimization
   cache is emptied through `filesystem.RemoveVerified`, confined to the cache folder and the fence.
 
 ### Project artifacts (purge) and installer packages
@@ -478,6 +495,7 @@ protected together with their ancestors (deleting a parent would delete them).
 | PATH editing, package-manager detection, verified executable and folder removal, links refused | `internal/install/install_test.go` |
 | PowerShell scripts parse in PowerShell 7 and 5.1 | `.github/workflows/ci.yml` |
 | StartupApproved byte semantics, target resolution (missing vs unknown), admin and RunOnce refusals, verified writes | `internal/startup/startup_test.go` (`TestParseApproval`, `TestApprovalDataMatchesTaskManager`, `TestCommandTarget`, `TestSetEnabled`, `TestSetEnabledVerifiesAndReportsFailures`) |
+| Scheduled tasks: XML parsing (bounded, fuzzed), ownership, argument paths; sign-in/startup selection, Windows tasks left out, per-user variables unknown, Enabled-flag writes verified, admin refusal, deleted task reported | `internal/tasks` (`TestParseXML`, `TestOwnedBy`, `TestCommandLineAndPaths`, `FuzzParseXML`, `TestRealTaskLibrary` read-only on CI); `internal/startup/tasks_test.go`; `internal/repair` `TestBrokenScheduledTasks`; `internal/cli` `TestStartupTaskDisableEnableRoundTrip` |
 | Shortcut parser bounds | `internal/startup/lnk_test.go` (`TestParseLinkRejectsMalformed`, `FuzzParseLink`) |
 | PATH analysis, exact removal, `.reg` backup round trip, no-overwrite backups | `internal/envpath/envpath_test.go` |
 | Repair: preselection, backup before write, compare-and-swap, machine PATH untouched, cancellation | `internal/repair/repair_test.go` |

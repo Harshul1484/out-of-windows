@@ -22,11 +22,14 @@ internal/
                          FinalPath, fence
   apps/                  installed apps (registry, AppX, Scoop, Chocolatey), names
   uninstall/             uninstall plans, Runner (the app's own uninstaller), Checker
-  leftovers/             evidence, claims, Find with confidence, Recycle
+  leftovers/             evidence (history, broken entries, traces, broken shortcuts),
+                         claims (incl. scheduled tasks), Find with confidence, Recycle
   analyzer/              parallel read-only disk scanner, largest files
   monitor/               read-only metrics (process table, per-core, PDH, GPU)
-  startup/               Run/RunOnce and Startup folder entries, .lnk parser,
-                         StartupApproved enable/disable
+  startup/               Run/RunOnce, Startup folder and sign-in/startup task entries,
+                         .lnk parser, StartupApproved and task Enabled enable/disable
+  tasks/                 scheduled tasks through ITaskService (read-only listing, task
+                         XML parsing) and the Enabled flag write
   envpath/               PATH analysis, .reg backup, compare-and-swap user PATH write
   doctor/                read-only probes and checks
   optimize/              bounded maintenance tasks through owner interfaces
@@ -56,10 +59,11 @@ Every change to the machine goes through one of these sinks; review them line by
 | Change | Sink | Guard purpose | Used by |
 |---|---|---|---|
 | Permanent file and folder deletion | `filesystem.RemoveVerified` | `PurposeCleanup` (rule scope), `PurposePurge` (artifact scope) | `clean`, `purge` (preselected), `update` and `remove` (own executable, exact path via `install.RemoveOwnFile`), sandbox simulations |
-| Move to the Recycle Bin | `filesystem.RecycleVerified` | `PurposeUserSelected`, `PurposeLeftover`, `PurposePurge`, `PurposeSelfRemove` | `analyze`, `installer`, `leftovers`, `purge` (from review), `remove` |
+| Move to the Recycle Bin | `filesystem.RecycleVerified` | `PurposeUserSelected`, `PurposeLeftover`, `PurposeShortcut` (broken shortcuts with their leftover), `PurposePurge`, `PurposeSelfRemove` | `analyze`, `installer`, `leftovers` and `uninstall`, `purge` (from review), `remove` |
 | Empty the Recycle Bin | `system.RecycleBin` (`SHEmptyRecycleBinW`) | — | `clean` (Recycle Bin rule) |
 | App uninstall | `uninstall.Runner` (the app's own uninstaller) | — | `uninstall` |
 | StartupApproved values | `startup.SetEnabled` → `Store.SetApproval` (read back) | — | `startup`, `repair` |
+| Scheduled task Enabled flag | `startup.SetEnabled` → `Store.SetTaskEnabled` → `tasks.System.SetEnabled` (`IRegisteredTask.Enabled`, read back) | — | `startup`, `repair` |
 | User `Path` value | `envpath.Store.WriteUser` (compare-and-swap) | — | `repair`, `remove` |
 | Maintenance tasks | `optimize.Runner` (DNS API, owner cmdlets) | — | `optimize` |
 | Executable replacement | `selfupdate` (rename aside, never overwrite) | — | `update` |

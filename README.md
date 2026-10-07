@@ -171,12 +171,15 @@ you run elevated; interactively, `oow clean` offers to clean them in an elevated
 3. Lists folders the app left behind, each with its evidence and a confidence level: the
    install folder the app registered, folders with its exact name, its publisher's folders,
    folders containing its program. Similar-looking names are never enough, and folders still
-   used by installed apps, running programs, services or startup entries are kept.
-4. Moves the leftovers you confirm to the **Recycle Bin**, so they can be restored.
+   used by installed apps, running programs, services, startup entries or scheduled tasks are
+   kept.
+4. Moves the leftovers you confirm to the **Recycle Bin**, so they can be restored, together
+   with your own Start menu and Desktop shortcuts that pointed into them.
 
 `oow leftovers` finds the same kind of folders for apps removed earlier: ones `oow`
-uninstalled, ones still listed but whose program files are gone, and programs Windows
-remembers running whose files no longer exist.
+uninstalled, ones still listed but whose program files are gone, programs Windows
+remembers running whose files no longer exist, and folders that Start menu or Desktop
+shortcuts still point into although their program is gone.
 
 ## How it keeps your data safe
 
