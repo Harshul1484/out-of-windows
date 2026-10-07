@@ -12,6 +12,8 @@ import (
 	"github.com/Harshul1484/out-of-windows/internal/leftovers"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
+	"github.com/Harshul1484/out-of-windows/internal/startup"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 	"github.com/Harshul1484/out-of-windows/internal/uninstall"
 )
@@ -199,6 +201,194 @@ func TestUsageTraces(t *testing.T) {
 	}
 	if !recentKept || len(got) != 2 {
 		t.Errorf("candidates %v, kept %+v", keys(got), res.Kept)
+	}
+}
+
+// A scheduled task that loads a DLL from a leftover folder keeps that folder,
+// even while the task is disabled; the app's other folder is still offered.
+func TestScheduledTasksClaimFolders(t *testing.T) {
+	w := newWorld(t)
+	evs := leftovers.EvidenceFromTraces(sandbox.Traces(w.root), w.guard, apps.FileExists)
+	list, _, err := sandbox.Tasks{Root: w.root}.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expand := func(s string) string { x, _ := sandbox.Expand(w.root, s); return x }
+	find := func(ts []tasks.Task) *leftovers.Result {
+		env := w.env(true)
+		env.Claims = leftovers.NewClaims(w.inventory(), func(a apps.App) bool { return a.IsBroken() }, leftovers.TaskClaims(ts, expand), w.guard)
+		return leftovers.Find(context.Background(), env, evs)
+	}
+	res := find(list)
+	got := byPath(res, w)
+	if _, ok := got[`C\Program Files\OldEditor`]; ok {
+		t.Fatal("a folder a scheduled task uses was offered")
+	}
+	if _, ok := got[roam+`\Old Editor`]; !ok {
+		t.Errorf("the folder the task does not use is missing: %v", keys(got))
+	}
+	kept := false
+	for _, k := range res.Kept {
+		kept = kept || w.rel(k.Path) == `C\Program Files\OldEditor` && k.Reason == `still used by scheduled task \Proseware\Old Editor Dictionary`
+	}
+	if !kept {
+		t.Errorf("kept = %+v", res.Kept)
+	}
+	// Without the task the folder is offered again.
+	var others []tasks.Task
+	for _, task := range list {
+		if task.Path != `\Proseware\Old Editor Dictionary` {
+			others = append(others, task)
+		}
+	}
+	if _, ok := byPath(find(others), w)[`C\Program Files\OldEditor`]; !ok {
+		t.Error("folder kept although no task uses it")
+	}
+}
+
+func TestTaskClaimPaths(t *testing.T) {
+	claims := leftovers.TaskClaims([]tasks.Task{{Path: `\Vendor\Job`, Actions: []tasks.Action{{
+		Command:          `"C:\Program Files\Vendor\Job\job.exe"`,
+		Arguments:        `--data "D:\Vendor Data\cache" --log=E:\logs\job.log`,
+		WorkingDirectory: `C:\ProgramData\Vendor`,
+	}}}}, nil)
+	var got []string
+	for _, c := range claims {
+		got = append(got, c.Path)
+		if c.Owner != `scheduled task \Vendor\Job` {
+			t.Errorf("owner = %q", c.Owner)
+		}
+	}
+	want := []string{`C:\Program Files\Vendor\Job`, `C:\ProgramData\Vendor`, `D:\Vendor Data\cache`, `D:\Vendor Data`,
+		`E:\logs\job.log`, `E:\logs`}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("claims = %q, want %q", got, want)
+	}
+}
+
+const startMenu = `C\Users\sandbox\AppData\Roaming\Microsoft\Windows\Start Menu\Programs`
+
+func (w *world) shortcutEnv() *leftovers.Env {
+	env := w.env(true)
+	env.Links = sandbox.Links(w.root)
+	env.Shortcuts = leftovers.FindBrokenShortcuts(context.Background(), w.guard, sandbox.ShortcutFolders(w.root), env.Links)
+	return env
+}
+
+// Broken shortcuts are exact evidence for the folder their program lived in:
+// only programs verifiably missing count, Startup folders are not read, the
+// shortcut's name is never matched, and the result is medium confidence.
+func TestShortcutEvidence(t *testing.T) {
+	w := newWorld(t)
+	env := w.shortcutEnv()
+	got := map[string]leftovers.Shortcut{}
+	for _, sc := range env.Shortcuts {
+		got[w.rel(sc.Path)] = sc
+	}
+	want := map[string]bool{ // broken shortcut -> may be recycled
+		startMenu + `\Adatum\Adatum Photo.lnk`:                                 true,
+		`C\Users\sandbox\Desktop\Adatum Photo.lnk`:                             true,
+		`C\ProgramData\Microsoft\Windows\Start Menu\Programs\Adatum Photo.lnk`: false, // all users
+		startMenu + `\Gone Game.lnk`:                                           true,
+		startMenu + `\Toolbox.lnk`:                                             true,
+	}
+	if len(got) != len(want) {
+		t.Errorf("broken shortcuts = %v", got)
+	}
+	for p, removable := range want {
+		sc, ok := got[p]
+		if !ok {
+			t.Errorf("%s not reported", p)
+			continue
+		}
+		if sc.Removable != removable || removable == (sc.Note != "") {
+			t.Errorf("%s = %+v", p, sc)
+		}
+	}
+	// A working shortcut, a network shortcut (unknown, not missing) and
+	// startup entries are not broken shortcuts here.
+	for _, p := range []string{startMenu + `\Wingtip Toys.lnk`, `C\Users\sandbox\Desktop\Team Tool.lnk`,
+		startMenu + `\Contoso\Contoso Studio.lnk`, startMenu + `\Startup\Old Notes.lnk`} {
+		if _, ok := got[p]; ok {
+			t.Errorf("%s reported as broken", p)
+		}
+	}
+
+	// Gone Game's folder is gone and Toolbox points into a shared "Tools"
+	// folder: only Adatum Photo is evidence.
+	evs := leftovers.EvidenceFromShortcuts(env.Shortcuts, w.guard)
+	if len(evs) != 1 || evs[0].Name != "Adatum Photo" || evs[0].Source != leftovers.SourceShortcut || len(evs[0].Shortcuts) != 3 ||
+		w.rel(evs[0].InstallLocation) != `C\Users\sandbox\AppData\Local\Programs\Adatum Photo` || evs[0].Exes[0] != "adatum.exe" {
+		t.Fatalf("evidence = %+v", evs)
+	}
+	res := leftovers.Find(context.Background(), env, evs)
+	cands := byPath(res, w)
+	c, ok := cands[`C\Users\sandbox\AppData\Local\Programs\Adatum Photo`]
+	// Roaming\Adatum Photo matches only by name: never offered.
+	if len(cands) != 1 || !ok || c.Confidence != leftovers.Medium || len(c.Shortcuts) != 3 || c.NeedsAdmin {
+		t.Fatalf("candidates = %+v", res.Candidates)
+	}
+
+	// Recent activity keeps a folder found only through shortcuts.
+	if err := sandbox.WriteFile(filepath.Join(w.root, `C\Users\sandbox\AppData\Local\Programs\Adatum Photo\new.tmp`), 10, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	res = leftovers.Find(context.Background(), env, evs)
+	if len(res.Candidates) != 0 || len(res.Kept) != 1 || !strings.Contains(res.Kept[0].Reason, "changed recently") {
+		t.Errorf("recently changed: %+v", res)
+	}
+}
+
+// Moving the folder takes the user's own shortcuts with it; the all-users
+// shortcut and unrelated shortcuts and folders stay.
+func TestShortcutsGoWithTheirFolder(t *testing.T) {
+	w := newWorld(t)
+	env := w.shortcutEnv()
+	res := leftovers.Find(context.Background(), env, leftovers.EvidenceFromShortcuts(env.Shortcuts, w.guard))
+	if len(res.Candidates) != 1 {
+		t.Fatalf("candidates = %+v", res.Candidates)
+	}
+	out := leftovers.Recycle(context.Background(), env, res.Candidates, sandbox.Recycler{Root: w.root})
+	if len(out.Recycled) != 1 || len(out.RecycledShortcuts) != 2 || out.Errors != 0 || len(out.Skipped) != 0 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	for _, gone := range []string{`C\Users\sandbox\AppData\Local\Programs\Adatum Photo`, startMenu + `\Adatum\Adatum Photo.lnk`,
+		`C\Users\sandbox\Desktop\Adatum Photo.lnk`} {
+		if w.exists(gone) {
+			t.Errorf("%s not moved", gone)
+		}
+	}
+	for _, kept := range []string{`C\ProgramData\Microsoft\Windows\Start Menu\Programs\Adatum Photo.lnk`,
+		startMenu + `\Wingtip Toys.lnk`, startMenu + `\Gone Game.lnk`, startMenu + `\Toolbox.lnk`,
+		`C\Users\sandbox\Desktop\Team Tool.lnk`, `C\Users\sandbox\AppData\Roaming\Adatum Photo\gallery.db`,
+		`C\Users\sandbox\AppData\Local\Tools\other-tool.exe`} {
+		if !w.exists(kept) {
+			t.Errorf("%s was removed", kept)
+		}
+	}
+}
+
+// After an uninstall the app's own Start Menu shortcut points into its
+// leftover folder and goes with it; a shortcut changed after the scan stays.
+func TestUninstalledAppShortcuts(t *testing.T) {
+	w := newWorld(t)
+	studio := w.uninstallApp("Contoso Studio")
+	env := w.shortcutEnv()
+	res := leftovers.Find(context.Background(), env, []leftovers.Evidence{leftovers.FromApp(studio, leftovers.SourceUninstalled)})
+	c := byPath(res, w)[pfContoso+`\Studio`]
+	if c.Confidence != leftovers.High || len(c.Shortcuts) != 1 || !c.Shortcuts[0].Removable ||
+		w.rel(c.Shortcuts[0].Path) != startMenu+`\Contoso\Contoso Studio.lnk` {
+		t.Fatalf("install folder = %+v", c)
+	}
+	// The shortcut now starts a program that exists: it is not moved.
+	lnk := filepath.Join(w.root, startMenu, "Contoso", "Contoso Studio.lnk")
+	if err := os.WriteFile(lnk, startup.BuildLink(filepath.Join(w.root, `C\Program Files\Contoso\Agent\agent.exe`), ""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := leftovers.Recycle(context.Background(), env, []leftovers.Candidate{c}, sandbox.Recycler{Root: w.root})
+	if len(out.Recycled) != 1 || len(out.RecycledShortcuts) != 0 || len(out.Skipped) != 1 ||
+		out.Skipped[0].Reason != "changed since it was scanned" || !w.exists(startMenu+`\Contoso\Contoso Studio.lnk`) {
+		t.Errorf("outcome = %+v", out)
 	}
 }
 

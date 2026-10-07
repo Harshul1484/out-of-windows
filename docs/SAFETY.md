@@ -104,8 +104,33 @@ on discovery succeeding.
   entries whose uninstaller and program are gone, and Windows usage traces (MuiCache and the
   Program Compatibility Assistant) of executables that no longer exist. Usage-trace evidence is
   at most medium confidence and ignored when the folder changed in the last 7 days.
+- **Broken shortcuts are exact-path evidence.** Shortcuts (`.lnk`, parsed by the bounded
+  `startup.ParseLink`) in the user's Start Menu Programs folder (4 levels), on the Desktop (top
+  level), in the all-users Start Menu and on the public Desktop are read; Startup folders are not,
+  links and cloud placeholders are never opened. A shortcut counts only when its target is an
+  `.exe` named by an absolute path on a fixed drive that verifiably does not exist; network
+  targets, shell items (Store apps, advertised installer shortcuts) and unreadable shortcuts are
+  unknown, never missing. The evidence is the exact folder that held the program (its parent
+  when that folder is `bin`, `x64` and similar), which must still exist in a leftover location,
+  pass the leftover purpose, and be specific: its name, or its publisher-folder parent's, must be
+  distinctive (a shared `Tools` folder never qualifies). The shortcut's name is never matched
+  against folders. Like usage traces, shortcut evidence alone is at most medium confidence (never
+  preselected, never taken by `--yes`) and ignored when the folder changed in the last 7 days.
+- **A broken shortcut goes with its leftover**, never on its own: when a folder is moved to the
+  Recycle Bin, the broken shortcuts whose program lived in it follow, but only those in the user's
+  own Start Menu Programs folder and Desktop. Each is re-read and must still point to the same
+  missing program, then is verified through a handle (identity, link, fence) and approved by the
+  guard's **shortcut purpose**: scope must be one of the user's shortcut folders (accepted only
+  strictly inside the profile and holding no AppData or other user folder), the path a `.lnk`
+  file at most three levels inside it, never in the Startup folder, never protected or sensitive.
+  Shortcuts in the Start Menu or Desktop for all users are listed and left alone.
 - **Claims keep folders.** Anything matching an installed app (name, install folder, program
-  folder), a running process, a service or a startup entry is kept and listed as such.
+  folder), a running process, a service, a startup entry or a scheduled task is kept and listed
+  as such. Scheduled tasks are read through the Task Scheduler API as the current user (every
+  task the user can read, Windows' own included); a task claims the folder of each program it
+  starts, its working directory, and absolute paths in its arguments with their folders (the
+  script or DLL a host program such as `rundll32` runs). Disabled tasks and tasks whose program
+  is gone still claim: enabling a task again needs its folder.
 - **The leftover purpose** of the guard allows only folders at most three levels inside
   Program Files, ProgramData, AppData (Roaming, Local, LocalLow) or `AppData\Local\Programs`,
   never Windows- or Microsoft-owned, shared (Common Files, WindowsApps, Package Cache,
@@ -398,4 +423,7 @@ show bytes removed and the *measured* change in free space.
 | DISM report parsed from fixtures; localized, cut-off, error and malformed reports never become zero or "recommended" | `optimize` `TestParseComponentStoreReport`, `TestParseComponentStoreReportFailsClosed`, `TestParseDISMSize` |
 | DISM command lines fixed (never `/ResetBase`, `/SPSuperseded`, `/Defer`) | `optimize` `TestDISMCommandLines` |
 | Component store task: opt-in (DISM not started unless named; `--yes` alone never runs it), admin only, fresh analysis right before acting (also when ticked), runs only on DISM's recommendation, Ctrl+C leaves DISM to finish | `optimize` `TestComponentStoreIsOptIn`, `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreTickedWithoutAnalysis`, `TestRunComponentStoreRechecksBeforeActing`, `TestRunComponentStoreCancelLeavesDISMToFinish`; `cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeSandboxRunnerRechecksBeforeActing`, `TestOptimizeUnreadableDISMReportNeverRuns` |
+| Shortcut purpose: own Start Menu and Desktop only, `.lnk` only, never Startup, all-users folders, whitelist; root validation | `safety` `TestShortcutPurpose`, `FuzzShortcutScope` |
+| Broken shortcuts: exact folder only, never names, medium at most, user's own shortcuts recycled with their folder, changed shortcuts kept | `leftovers` `TestShortcutEvidence`, `TestShortcutsGoWithTheirFolder`, `TestUninstalledAppShortcuts`; `cli` `TestLeftoversCommand`, `TestUninstallEndToEnd` |
+| Scheduled tasks keep the folders they use | `leftovers` `TestScheduledTasksClaimFolders`, `TestTaskClaimPaths` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |

@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/Harshul1484/out-of-windows/internal/apps"
+	"github.com/Harshul1484/out-of-windows/internal/filesystem"
 	"github.com/Harshul1484/out-of-windows/internal/leftovers"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
+	"github.com/Harshul1484/out-of-windows/internal/startup"
+	"github.com/Harshul1484/out-of-windows/internal/system"
 	"github.com/Harshul1484/out-of-windows/internal/uninstall"
 )
 
@@ -118,6 +121,30 @@ func (s Apps) Installed(ctx context.Context, a apps.App) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// ShortcutFolders are the simulated folders searched for broken shortcuts,
+// laid out like leftovers.SystemShortcutFolders.
+func ShortcutFolders(root string) []leftovers.ShortcutFolder {
+	l := Locations(root)
+	common := filepath.Join(l.ProgramData, "Microsoft", "Windows", "Start Menu", "Programs")
+	return []leftovers.ShortcutFolder{
+		{Path: StartMenuPrograms(root), Location: "your Start Menu", Depth: 4, Removable: true, Skip: []string{StartupFolder(root, false)}},
+		{Path: l.UserContent[0], Location: "your Desktop", Depth: 1, Removable: true},
+		{Path: common, Location: "the Start Menu for all users", Depth: 4, Skip: []string{StartupFolder(root, true)}},
+		{Path: filepath.Join(l.PublicProfile, "Desktop"), Location: "the public Desktop", Depth: 1},
+	}
+}
+
+// Links reads shortcuts in the sandbox: ASCII strings only (as BuildLink
+// writes them), variables of the simulated system, real probes of sandbox
+// paths.
+func Links(root string) leftovers.LinkResolver {
+	return leftovers.LinkResolver{
+		Read:   func(p string) (*startup.Link, error) { return startup.ReadLink(p, nil) },
+		Expand: func(s string) string { x, _ := Expand(root, s); return x },
+		Probe:  system.ProbePath,
+	}
 }
 
 // Traces returns simulated usage traces from <root>\registry\traces.json.
@@ -244,5 +271,58 @@ func seedApps(root string, l safety.Locations) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(j(root, "registry", "traces.json"), data, 0o644)
+	if err := os.WriteFile(j(root, "registry", "traces.json"), data, 0o644); err != nil {
+		return err
+	}
+	return seedShortcuts(root, l)
+}
+
+// seedShortcuts writes Start Menu and Desktop shortcuts. Adatum Photo's
+// program is gone while its folder and three shortcuts remain (the user's
+// Start Menu and Desktop: recycled with the folder; the all-users Start Menu:
+// evidence only), and Contoso Studio's shortcut breaks when the app is
+// uninstalled. Non-targets: a working shortcut, a network shortcut (unknown,
+// never missing), a shortcut whose whole folder is gone, one into a shared
+// "Tools" folder, and a Roaming\Adatum Photo folder only a name would match.
+func seedShortcuts(root string, l safety.Locations) error {
+	old := time.Now().Add(-60 * 24 * time.Hour)
+	j := filepath.Join
+	progs := j(l.LocalAppData, "Programs")
+	adatum := j(progs, "Adatum Photo")
+	for _, f := range []struct {
+		path string
+		size int
+	}{
+		{j(adatum, "plugins", "sepia.dll"), 800000},
+		{j(adatum, "presets.json"), 2000},
+		{j(l.RoamingAppData, "Adatum Photo", "gallery.db"), 50000},
+		{j(l.LocalAppData, "Tools", "other-tool.exe"), 30000},
+	} {
+		if err := WriteFile(f.path, f.size, old); err != nil {
+			return err
+		}
+	}
+	sm, desk := StartMenuPrograms(root), l.UserContent[0]
+	common := j(l.ProgramData, "Microsoft", "Windows", "Start Menu", "Programs")
+	for path, link := range map[string][]byte{
+		j(sm, "Adatum", "Adatum Photo.lnk"):    startup.BuildLink(j(adatum, "adatum.exe"), ""),
+		j(desk, "Adatum Photo.lnk"):            startup.BuildLink(j(adatum, "adatum.exe"), "--new-window"),
+		j(common, "Adatum Photo.lnk"):          startup.BuildLink(j(adatum, "adatum.exe"), ""),
+		j(sm, "Contoso", "Contoso Studio.lnk"): startup.BuildLink(j(l.ProgramFiles, "Contoso", "Studio", "studio.exe"), ""),
+		j(sm, "Wingtip Toys.lnk"):              startup.BuildLink(j(l.ProgramFilesX86, "Wingtip Toys", "wingtip.exe"), ""),
+		j(desk, "Team Tool.lnk"):               startup.BuildLink(`\\fileserver\tools\teamtool.exe`, ""),
+		j(sm, "Gone Game.lnk"):                 startup.BuildLink(j(progs, "Gone Game", "game.exe"), ""),
+		j(sm, "Toolbox.lnk"):                   startup.BuildLink(j(l.LocalAppData, "Tools", "runner.exe"), ""),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, link, 0o644); err != nil {
+			return err
+		}
+		if err := filesystem.SetTimes(path, old, old); err != nil {
+			return err
+		}
+	}
+	return nil
 }

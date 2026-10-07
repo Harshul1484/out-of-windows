@@ -163,6 +163,12 @@ New-ItemProperty -Path $regKey -Name Publisher -Value 'OOW CI' | Out-Null
 New-ItemProperty -Path $regKey -Name InstallLocation -Value $appDir | Out-Null
 New-ItemProperty -Path $regKey -Name DisplayIcon -Value (Join-Path $appDir 'app.exe') | Out-Null
 New-ItemProperty -Path $regKey -Name UninstallString -Value ('"' + (Join-Path $appDir 'uninstall.cmd') + '"') | Out-Null
+# Shell-made shortcuts to the app: the user's own goes to the Recycle Bin with the install
+# folder once the program is gone; the all-users one is never touched.
+$shell = New-Object -ComObject WScript.Shell
+$appLnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'OOW CI App.lnk'
+$commonAppLnk = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'OOW CI App.lnk'
+foreach ($l in $appLnk, $commonAppLnk) { $s = $shell.CreateShortcut($l); $s.TargetPath = (Join-Path $appDir 'app.exe'); $s.Save() }
 
 $list = & $Oow uninstall --list --json | ConvertFrom-Json
 Write-Host "Inventory: $($list.apps.Count) apps; package managers: $($list.package_managers | ConvertTo-Json -Compress)"
@@ -177,6 +183,11 @@ if ($LASTEXITCODE -ne 0 -or -not $r.outcome.removed) { throw "uninstall failed: 
 if (Test-Path $regKey) { throw 'uninstall entry still present' }
 if ((Test-Path $appDir) -or (Test-Path $appData)) { throw 'leftovers not moved to the Recycle Bin' }
 if ($r.recycled.recycled.Count -ne 2) { throw "expected 2 recycled leftovers, got $($r.recycled.recycled.Count)" }
+if (@($r.recycled.recycled_shortcuts).Count -ne 1 -or $r.recycled.recycled_shortcuts[0] -ne $appLnk -or (Test-Path -LiteralPath $appLnk)) {
+  throw "the app's broken Start menu shortcut was not moved with its folder: $($r.recycled.recycled_shortcuts -join ', ')"
+}
+if (-not (Test-Path -LiteralPath $commonAppLnk)) { throw 'a shortcut in the all-users Start menu was removed' }
+Remove-Item -LiteralPath $commonAppLnk -Force
 Assert-Canaries
 Write-Host '::endgroup::'
 
@@ -512,6 +523,87 @@ if ($cs.status -eq 'ready') {
 } else {
   Write-Host "DISM does not recommend a cleanup on this VM: $($cs.reason)"
 }
+Assert-Canaries
+Write-Host '::endgroup::'
+
+Write-Host '::group::scheduled tasks and broken shortcuts (only tasks and files this section creates are changed)'
+$taskGone = 'OOW CI Logon Gone'       # sign-in task whose program is missing
+$taskClaim = 'OOW CI Claim'           # daily task running a helper inside $tasked
+$tasked = Join-Path $env:LOCALAPPDATA 'Programs\OOW CI Tasked'
+$taskedHelper = Join-Path $tasked 'helper.exe'
+$taskedExe = Join-Path $tasked 'tasked.exe'
+$taskedLnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'OOW CI Tasked.lnk'
+$me = "$env:USERDOMAIN\$env:USERNAME"
+function Get-TaskEnabled([string] $name) { (Get-ScheduledTask -TaskName $name -TaskPath '\' -ErrorAction Stop).Settings.Enabled }
+function Get-OtherTasks {
+  Get-ScheduledTask | Where-Object { $_.TaskName -notlike 'OOW CI*' -and $_.TaskPath -notlike '\Microsoft\*' } |
+    ForEach-Object { '{0}{1}={2}' -f $_.TaskPath, $_.TaskName, $_.Settings.Enabled } | Sort-Object
+}
+$otherTasks = Get-OtherTasks
+try {
+  # The app folder keeps data and a helper; its program exists only while the Shell makes the
+  # Start menu shortcut, as for a real install, so the shortcut is then broken.
+  New-File (Join-Path $tasked 'data\state.bin') 4096
+  New-File $taskedHelper 1000
+  New-File $taskedExe 1000
+  $s = $shell.CreateShortcut($taskedLnk); $s.TargetPath = $taskedExe; $s.Save()
+  Remove-Item -LiteralPath $taskedExe -Force
+  Set-OldTree $tasked
+  $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
+  Register-ScheduledTask -TaskName $taskGone -TaskPath '\' -Principal $principal -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $me) `
+    -Action (New-ScheduledTaskAction -Execute 'C:\OOW-CI-task-missing\gone.exe' -Argument '/background') | Out-Null
+  Register-ScheduledTask -TaskName $taskClaim -TaskPath '\' -Principal $principal -Trigger (New-ScheduledTaskTrigger -Daily -At 3am) `
+    -Action (New-ScheduledTaskAction -Execute $taskedHelper) | Out-Null
+
+  # oow startup lists the sign-in task, with its program missing.
+  $st = & $Oow startup --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw "startup --json exited $LASTEXITCODE" }
+  $st.entries | Where-Object { $_.source -like 'task-*' } | Format-Table id, state, target_state, scope, target -AutoSize | Out-String -Width 250 | Write-Host
+  $e = $st.entries | Where-Object { $_.id -eq "task-logon:$taskGone" }
+  if (-not $e -or $e.target_state -ne 'missing' -or $e.task.path -ne "\$taskGone" -or $e.state -ne 'enabled') { throw "logon task not listed as broken: $($e | ConvertTo-Json -Compress)" }
+  if ($st.entries | Where-Object { $_.task.path -like '\Microsoft\*' }) { throw 'a Windows task is listed' }
+
+  # Disable and enable through oow: only the task's Enabled flag changes.
+  $dry = & $Oow startup disable "task-logon:$taskGone" --dry-run --json | ConvertFrom-Json
+  if ($dry.results[0].status -ne 'planned' -or -not (Get-TaskEnabled $taskGone)) { throw 'startup dry run changed the task' }
+  & $Oow startup disable "task-logon:$taskGone" | Out-Null
+  if ($LASTEXITCODE -ne 4) { throw "startup disable without --yes exited $LASTEXITCODE" }
+  $off = & $Oow startup disable "task-logon:$taskGone" --yes --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $off.results[0].status -ne 'changed' -or $off.results[0].task_enabled_before -ne $true -or (Get-TaskEnabled $taskGone)) {
+    throw "disable did not switch the task off: $($off.results[0] | ConvertTo-Json -Compress)"
+  }
+  $t = Get-ScheduledTask -TaskName $taskGone -TaskPath '\'
+  if ($t.Actions[0].Execute -ne 'C:\OOW-CI-task-missing\gone.exe' -or $t.Triggers.Count -ne 1) { throw 'the task was edited' }
+  $on = & $Oow startup enable "task-logon:$taskGone" --yes --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $on.results[0].status -ne 'changed' -or $on.results[0].task_enabled_before -ne $false -or -not (Get-TaskEnabled $taskGone)) {
+    throw "enable did not switch the task on: $($on.results[0] | ConvertTo-Json -Compress)"
+  }
+
+  # Leftovers: the broken shortcut is evidence for the folder, but the daily task still runs a
+  # program in it, so it is kept; once the task is gone it is offered, at medium confidence.
+  $lo = & $Oow leftovers --dry-run --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw "leftovers dry run exited $LASTEXITCODE" }
+  $kept = $lo.result.kept | Where-Object { $_.path -eq $tasked }
+  if (-not $kept -or $kept.reason -notlike "*scheduled task \$taskClaim") { throw "folder used by a task not kept: $($lo.result.kept | ConvertTo-Json -Compress)" }
+  if ($lo.result.candidates | Where-Object { $_.path -eq $tasked }) { throw 'folder offered while a scheduled task uses it' }
+  Unregister-ScheduledTask -TaskName $taskClaim -TaskPath '\' -Confirm:$false
+  $lo = & $Oow leftovers --dry-run --json | ConvertFrom-Json
+  $c = $lo.result.candidates | Where-Object { $_.path -eq $tasked }
+  $c | ConvertTo-Json -Depth 4 | Write-Host
+  if (-not $c -or $c.source -ne 'shortcut' -or $c.confidence -ne 'medium') { throw "folder not offered from its broken shortcut: $($lo.result | ConvertTo-Json -Depth 4 -Compress)" }
+  if (-not ($c.shortcuts | Where-Object { $_.path -eq $taskedLnk -and $_.removable })) { throw 'the broken shortcut is not listed with its folder' }
+  if (-not ($lo.evidence | Where-Object { $_.source -eq 'shortcut' -and $_.install_location -eq $tasked -and $_.shortcuts -contains $taskedLnk })) {
+    throw 'no shortcut evidence for the folder'
+  }
+  if (-not (Test-Path -LiteralPath $taskedHelper) -or -not (Test-Path -LiteralPath $taskedLnk)) { throw 'a dry run changed the folder or its shortcut' }
+  if ((@(Get-OtherTasks) -join "`n") -ne (@($otherTasks) -join "`n")) { throw 'a scheduled task this test did not create changed' }
+  Assert-Canaries
+} finally {
+  foreach ($n in $taskGone, $taskClaim) { Unregister-ScheduledTask -TaskName $n -TaskPath '\' -Confirm:$false -ErrorAction SilentlyContinue }
+  Remove-Item -LiteralPath $taskedLnk -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $tasked -Recurse -Force -ErrorAction SilentlyContinue
+}
+foreach ($n in $taskGone, $taskClaim) { if (Get-ScheduledTask -TaskName $n -TaskPath '\' -ErrorAction SilentlyContinue) { throw "task $n was not cleaned up" } }
 Assert-Canaries
 Write-Host '::endgroup::'
 

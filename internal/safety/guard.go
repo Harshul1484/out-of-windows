@@ -68,6 +68,14 @@ const (
 	// inside it, never inside a .git folder, and never be a sensitive file
 	// type except inside an installed package (see IsPurgeSensitive).
 	PurposePurge
+	// PurposeShortcut is a broken shortcut (.lnk) whose program is gone,
+	// moved to the Recycle Bin together with the leftover folder the program
+	// lived in. Scope must be one of the user's own shortcut folders
+	// (Locations.ShortcutRoots: Start Menu Programs, Desktop) that the guard
+	// accepted; the path must be a .lnk file at most three levels inside it,
+	// never inside a never-remove folder within it (the Startup folder, whose
+	// entries are disabled, never removed), never protected or sensitive.
+	PurposeShortcut
 )
 
 // purgeArtifactNames are the only folder names (patterns) PurposePurge may
@@ -197,6 +205,7 @@ type Guard struct {
 	windowsDir  string
 	appData     []location // AppData roots: application state, never projects
 	profile     string     // normalized user profile, "" when unknown
+	shortcut    []location // the user's own shortcut folders (PurposeShortcut scopes)
 }
 
 // LeftoverRoots returns where app leftovers may be found, most specific
@@ -360,6 +369,51 @@ func (g *Guard) checkPurge(p, scope string, dir bool) Decision {
 	}
 	if !dir && len(rel) > 0 && IsPurgeSensitive(baseName(s), len(rel), rel[len(rel)-1]) {
 		return deny(ClassSensitive, "sensitive file type: %s is never purged", rel[len(rel)-1])
+	}
+	if sys, ok := g.containing(g.system, p); ok {
+		return deny(ClassSystem, "%s is inside the %s", p, sys.label)
+	}
+	if _, ok := g.containing(g.userContent, p); ok {
+		return Decision{Allowed: true, Class: ClassUserContent}
+	}
+	return Decision{Allowed: true, Class: ClassOrdinary}
+}
+
+// ShortcutRoots returns the user's shortcut folders the guard accepts as
+// PurposeShortcut scopes.
+func (g *Guard) ShortcutRoots() []string {
+	out := make([]string, 0, len(g.shortcut))
+	for _, l := range g.shortcut {
+		out = append(out, l.path)
+	}
+	return out
+}
+
+func (g *Guard) checkShortcut(p, scope string) Decision {
+	s, err := Normalize(scope)
+	if err != nil || strings.TrimSpace(scope) == "" {
+		return deny(ClassOrdinary, "removing a shortcut requires the Start Menu or Desktop folder it is in")
+	}
+	known := false
+	for _, r := range g.shortcut {
+		known = known || Key(r.path) == Key(s)
+	}
+	if !known {
+		return deny(ClassOrdinary, "%s is not your own Start Menu or Desktop folder", s)
+	}
+	if !IsStrictlyWithin(p, s) {
+		return deny(ClassOrdinary, "%s is outside %s", p, s)
+	}
+	if !strings.EqualFold(filepath.Ext(p), ".lnk") {
+		return deny(ClassOrdinary, "%s is not a shortcut (.lnk) file", p)
+	}
+	if len(splitNonEmpty(p))-len(splitNonEmpty(s)) > 3 {
+		return deny(ClassOrdinary, "%s is too deep inside %s", p, s)
+	}
+	for _, c := range g.critical {
+		if IsStrictlyWithin(c.path, s) && IsWithin(p, c.path) {
+			return deny(ClassCritical, "%s is inside the %s (%s)", p, c.label, c.path)
+		}
 	}
 	if sys, ok := g.containing(g.system, p); ok {
 		return deny(ClassSystem, "%s is inside the %s", p, sys.label)
@@ -563,6 +617,28 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 	g.appData = appendLoc(g.appData, locs.LocalAppData, "Local AppData", false)
 	g.appData = appendLoc(g.appData, locs.LocalLow, "LocalLow AppData", false)
 
+	// Shortcut folders are accepted only strictly inside the profile and
+	// only when they hold neither AppData nor another user folder, so a
+	// Desktop redirected to the profile itself or another drive never
+	// becomes a scope.
+	for _, p := range locs.ShortcutRoots {
+		n, err := Normalize(p)
+		if err != nil || g.profile == "" || IsUNC(n) || !IsStrictlyWithin(n, g.profile) || g.within(g.system, n) {
+			continue
+		}
+		ok := true
+		for _, list := range [][]location{g.appData, g.userContent} {
+			for _, l := range list {
+				if Key(l.path) != Key(n) && IsWithin(l.path, n) {
+					ok = false
+				}
+			}
+		}
+		if ok {
+			g.shortcut = appendLoc(g.shortcut, n, "shortcut folder", false)
+		}
+	}
+
 	for _, p := range locs.SelfDirs {
 		g.protected = appendLoc(g.protected, p, "used by "+toolDirLabel, false)
 		g.self = appendLoc(g.self, p, "used by "+toolDirLabel, false)
@@ -664,6 +740,9 @@ func (g *Guard) Check(req Request) Decision {
 	}
 	if req.Purpose == PurposePurge {
 		return g.checkPurge(p, req.Scope, req.Dir)
+	}
+	if req.Purpose == PurposeShortcut {
+		return g.checkShortcut(p, req.Scope)
 	}
 
 	if req.Purpose == PurposeCleanup && strings.TrimSpace(req.Scope) == "" {

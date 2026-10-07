@@ -12,6 +12,7 @@ import (
 	"github.com/Harshul1484/out-of-windows/internal/repair"
 	"github.com/Harshul1484/out-of-windows/internal/startup"
 	"github.com/Harshul1484/out-of-windows/internal/system"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 )
 
@@ -71,6 +72,17 @@ func (e *entries) List(context.Context) ([]startup.Entry, []string, error) {
 func (e *entries) SetApproval(en startup.Entry, data []byte) error {
 	e.written[en.ID] = data
 	return nil
+}
+
+func (e *entries) SetTaskEnabled(en startup.Entry, enabled bool) error {
+	for _, r := range e.raws {
+		if r.Task != nil && r.Task.Path == en.Location {
+			r.Task.Enabled = enabled
+			e.written[en.ID] = nil // recorded as touched; a task has no approval value
+			return nil
+		}
+	}
+	return startup.ErrEntryGone
 }
 
 type world struct {
@@ -258,6 +270,48 @@ func TestApplyCancelled(t *testing.T) {
 		t.Errorf("changed after cancel: %+v", out)
 	}
 }
+
+// A sign-in task whose program is gone is disabled through its Enabled flag
+// when it is the user's own; another account's task needs elevation.
+func TestBrokenScheduledTasks(t *testing.T) {
+	f := testutil.NewFixture(t)
+	f.File(`Apps\present.exe`, 10, time.Hour)
+	me := tasks.Account{SID: "S-1-5-21-9-9-9-1001", Name: "me"}
+	own := tasks.Task{Path: `\Gone Sync`, Enabled: true, Triggers: []tasks.Trigger{tasks.TriggerLogon}, UserID: me.SID, LogonUser: "me",
+		Actions: []tasks.Action{{Command: f.Path(`Apps\gone.exe`)}}}
+	sys := tasks.Task{Path: `\Vendor\Gone Service`, Enabled: true, Triggers: []tasks.Trigger{tasks.TriggerLogon}, UserID: "S-1-5-18",
+		Actions: []tasks.Action{{Command: f.Path(`Apps\gone-service.exe`)}}}
+	fine := tasks.Task{Path: `\Present`, Enabled: true, Triggers: []tasks.Trigger{tasks.TriggerLogon}, UserID: me.SID, LogonUser: "me",
+		Actions: []tasks.Action{{Command: f.Path(`Apps\present.exe`)}}}
+	raws, _ := startup.TaskRaws(context.Background(), taskStore{list: []tasks.Task{own, sys, fine}, acct: me})
+	store := &entries{written: map[string][]byte{}, raws: raws}
+	list, _, _ := store.List(context.Background())
+
+	p := repair.NewPlan(nil, nil, list, false)
+	fx := fixByID(p)
+	if len(p.Fixes) != 2 || !fx["startup:task-logon:Gone Sync"].Selected || fx[`startup:task-logon:Vendor\Gone Service`].Selected ||
+		fx[`startup:task-logon:Vendor\Gone Service`].Review != startup.ReasonTaskNeedsAdmin {
+		t.Fatalf("plan = %+v", p.Fixes)
+	}
+	out := repair.Apply(context.Background(), repair.Env{Startup: store, Now: time.Now()}, p, selected(p))
+	if out.Fixed != 1 || out.Failed != 0 {
+		t.Fatalf("outcome = %+v", out)
+	}
+	for _, r := range store.raws {
+		if want := r.Task.Path != `\Gone Sync`; r.Task.Enabled != want {
+			t.Errorf("%s enabled = %v, want %v", r.Task.Path, r.Task.Enabled, want)
+		}
+	}
+}
+
+type taskStore struct {
+	list []tasks.Task
+	acct tasks.Account
+}
+
+func (s taskStore) List(context.Context) ([]tasks.Task, []string, error) { return s.list, nil, nil }
+func (s taskStore) SetEnabled(string, bool) error                        { return errors.New("not used") }
+func (s taskStore) Account() tasks.Account                               { return s.acct }
 
 func TestQuotedPathIsNotRewritten(t *testing.T) {
 	w := newWorld(t)

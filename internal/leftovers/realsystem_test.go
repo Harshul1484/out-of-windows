@@ -1,8 +1,10 @@
 package leftovers_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Harshul1484/out-of-windows/internal/leftovers"
@@ -34,5 +36,29 @@ func TestRealTracesAndClaims(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the running test binary's folder %s is not claimed (%d claims)", self, len(claims))
+	}
+}
+
+// Read-only: shortcuts on the real system. Nothing is moved.
+func TestRealBrokenShortcuts(t *testing.T) {
+	testutil.SkipUnlessRealSystem(t)
+	g := safety.NewGuard(safety.DiscoverLocations(), nil)
+	if roots := g.ShortcutRoots(); len(roots) != 2 {
+		t.Errorf("shortcut roots = %q (want the Start Menu Programs folder and the Desktop)", roots)
+	}
+	folders := leftovers.SystemShortcutFolders()
+	if len(folders) < 3 {
+		t.Errorf("shortcut folders = %+v", folders)
+	}
+	shortcuts := leftovers.FindBrokenShortcuts(context.Background(), g, folders, leftovers.SystemLinks())
+	for _, sc := range shortcuts {
+		if !strings.EqualFold(filepath.Ext(sc.Target), ".exe") || !strings.EqualFold(filepath.Ext(sc.Path), ".lnk") ||
+			sc.Removable == (sc.Scope == "") {
+			t.Errorf("shortcut %+v", sc)
+		}
+		t.Logf("broken: %s -> %s (removable %v %s)", sc.Path, sc.Target, sc.Removable, sc.Note)
+	}
+	for _, ev := range leftovers.EvidenceFromShortcuts(shortcuts, g) {
+		t.Logf("evidence: %s in %s from %v", ev.Name, ev.InstallLocation, ev.Shortcuts)
 	}
 }

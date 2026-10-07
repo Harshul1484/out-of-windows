@@ -74,8 +74,10 @@ jobs:
         run: |
           go test ./internal/safety -run '^$' -fuzz FuzzGuardScope -fuzztime 60s
           go test ./internal/safety -run '^$' -fuzz FuzzPurgeScope -fuzztime 60s
+          go test ./internal/safety -run '^$' -fuzz FuzzShortcutScope -fuzztime 60s
           go test ./internal/safety -run '^$' -fuzz FuzzNormalizeIdempotent -fuzztime 30s
           go test ./internal/startup -run '^$' -fuzz FuzzParseLink -fuzztime 30s
+          go test ./internal/tasks -run '^$' -fuzz FuzzParseXML -fuzztime 30s
       - name: build
         run: go build -trimpath -o bin/oow.exe ./cmd/oow
       - name: version information and manifest

@@ -5,9 +5,9 @@
 // the install folder an uninstall entry recorded, an exact (normalized) name
 // match under a data root, the publisher's folder, or the app's executable
 // inside. Similar-looking names are not evidence. Folders still claimed by an
-// installed app, a running process, a service or a startup entry are kept,
-// and so is anything the safety guard refuses. Every candidate carries a
-// confidence level; only high-confidence candidates are preselected.
+// installed app, a running process, a service, a startup entry or a scheduled
+// task are kept, and so is anything the safety guard refuses. Every candidate
+// carries a confidence level; only high-confidence candidates are preselected.
 package leftovers
 
 import (
@@ -17,6 +17,7 @@ import (
 
 	"github.com/Harshul1484/out-of-windows/internal/apps"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
 // Evidence identifies an application that is no longer installed.
@@ -26,11 +27,14 @@ type Evidence struct {
 	InstallLocation string   `json:"install_location,omitempty"`
 	Exes            []string `json:"exes,omitempty"`
 	// Source is "uninstalled" (just now), "history" (uninstalled earlier
-	// by oow), "broken-entry" (registry entry whose app is gone) or
-	// "usage-trace" (Windows recorded running an executable that is gone).
+	// by oow), "broken-entry" (registry entry whose app is gone),
+	// "usage-trace" (Windows recorded running an executable that is gone) or
+	// "shortcut" (a shortcut to a program that is gone).
 	Source string `json:"source"`
 	// When is when the app was uninstalled, if known.
 	When time.Time `json:"when,omitempty"`
+	// Shortcuts are the broken shortcuts behind "shortcut" evidence.
+	Shortcuts []string `json:"shortcuts,omitempty"`
 }
 
 // Describe explains in words why this app is believed to be gone.
@@ -47,6 +51,8 @@ func (e Evidence) Describe() string {
 		return "still listed as installed, but its uninstaller and program are gone"
 	case SourceTrace:
 		return "Windows remembers running it, but its program is gone"
+	case SourceShortcut:
+		return "a shortcut to it remains, but its program is gone"
 	}
 	return e.Source
 }
@@ -57,7 +63,13 @@ const (
 	SourceHistory     = "history"
 	SourceBroken      = "broken-entry"
 	SourceTrace       = "usage-trace"
+	SourceShortcut    = "shortcut"
 )
+
+// weakSource reports whether evidence from source alone is never enough
+// for high confidence: usage traces and broken shortcuts say a program is
+// gone, not that the app was uninstalled.
+func weakSource(source string) bool { return source == SourceTrace || source == SourceShortcut }
 
 // FromApp turns an app record into evidence.
 func FromApp(a apps.App, source string) Evidence {
@@ -68,8 +80,13 @@ func FromApp(a apps.App, source string) Evidence {
 	return ev
 }
 
-// keys are the distinctive normalized names identifying the app.
+// keys are the distinctive normalized names identifying the app. Shortcut
+// evidence has none: it names an exact folder, and its file name is shown,
+// never matched.
 func (e Evidence) keys() []string {
+	if e.Source == SourceShortcut {
+		return nil
+	}
 	var out []string
 	add := func(s string) {
 		n := apps.NormalizeName(s)
@@ -94,6 +111,9 @@ func (e Evidence) keys() []string {
 }
 
 func (e Evidence) publisherKey() string {
+	if e.Source == SourceShortcut {
+		return ""
+	}
 	p := apps.NormalizePublisher(e.Publisher)
 	if apps.IsDistinctive(p) {
 		return p
@@ -169,6 +189,32 @@ func appendUnique(list []string, s string) []string {
 type ClaimPath struct {
 	Path  string
 	Owner string
+}
+
+// TaskClaims lists the folders scheduled tasks still use: the folder of each
+// program a task starts, its working directory, and absolute paths in its
+// arguments with their folders (the script or DLL a host program such as
+// rundll32 or wscript runs). expand expands %VARIABLES%. Disabled tasks claim
+// too, since switching one on again needs its folder, and so do tasks whose
+// program is gone: `oow startup` lists those, and nothing under them is
+// offered while they are registered.
+func TaskClaims(ts []tasks.Task, expand func(string) string) []ClaimPath {
+	var out []ClaimPath
+	for _, t := range ts {
+		owner := "scheduled task " + t.Path
+		for _, a := range t.Actions {
+			if p := a.Program(expand); p != "" {
+				out = append(out, ClaimPath{Path: filepath.Dir(p), Owner: owner})
+			}
+			if p := a.WorkingDir(expand); p != "" {
+				out = append(out, ClaimPath{Path: p, Owner: owner})
+			}
+			for _, p := range a.ArgumentPaths(expand) {
+				out = append(out, ClaimPath{Path: p, Owner: owner}, ClaimPath{Path: filepath.Dir(p), Owner: owner})
+			}
+		}
+	}
+	return out
 }
 
 // Claims records what installed software still owns.

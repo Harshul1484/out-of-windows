@@ -38,12 +38,15 @@ func newStartupCmd(app *App) *cobra.Command {
 		Use:     "startup",
 		Short:   "Review and disable programs that start when you sign in",
 		GroupID: "system",
-		Long: "List programs Windows starts when you sign in (Run and RunOnce registry values and\n" +
-			"the Startup folders) with their state, and whether the program they start still\n" +
-			"exists. On a terminal, choose which ones run.\n\n" +
+		Long: "List programs Windows starts when you sign in (Run and RunOnce registry values, the\n" +
+			"Startup folders, and scheduled tasks that run at sign-in or at startup) with their\n" +
+			"state, and whether the program they start still exists. On a terminal, choose which\n" +
+			"ones run.\n\n" +
 			"Disabling works like Task Manager: " + buildinfo.Name + " sets the entry's StartupApproved value, so\n" +
-			"the entry itself is never deleted and can be enabled again. Entries for all users\n" +
-			"need administrator rights to change.",
+			"the entry itself is never deleted and can be enabled again. A scheduled task is\n" +
+			"switched off with its own Enabled flag, like Task Scheduler's Disable; the task is\n" +
+			"never edited or deleted. Windows' own tasks are not listed. Entries for all users\n" +
+			"(and tasks of other accounts) need administrator rights to change.",
 		Example: "  " + buildinfo.Name + " startup\n" +
 			"  " + buildinfo.Name + " startup --list --json\n" +
 			"  " + buildinfo.Name + " startup disable \"Contoso Agent\" --dry-run\n" +
@@ -73,7 +76,8 @@ func newStartupChangeCmd(app *App, enable bool) *cobra.Command {
 		Use:   verb + " <name|id>...",
 		Short: short,
 		Long: short + ". Entries are matched by ID, exact name, or part of the name\n" +
-			"(see `" + buildinfo.Name + " startup --list`). Only the StartupApproved value changes.",
+			"(see `" + buildinfo.Name + " startup --list`). Only the StartupApproved value, or a\n" +
+			"scheduled task's Enabled flag, changes.",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := runStartupChange(cmd.Context(), app, o, enable, args)
@@ -369,12 +373,14 @@ func runStartupChange(ctx context.Context, app *App, o startupOptions, enable bo
 	doc := map[string]any{"schema": "oow.startup-change/v1", "action": verb, "dry_run": o.dryRun,
 		"sandbox": app.Sandbox != "", "elevated": app.Elevated}
 	actionable, adminSkipped, refused := 0, 0, 0
+	adminReason := ""
 	for _, r := range plan {
 		switch {
 		case r.Status == startup.StatusPlanned:
 			actionable++
-		case r.Reason == startup.ReasonNeedsAdmin:
+		case startup.IsAdminReason(r.Reason):
 			adminSkipped++
+			adminReason = r.Reason
 		case r.Status == startup.StatusSkipped:
 			refused++
 		}
@@ -382,7 +388,7 @@ func runStartupChange(ctx context.Context, app *App, o startupOptions, enable bo
 	// refusal reports entries that were asked for but cannot be changed.
 	refusal := func() error {
 		if adminSkipped > 0 {
-			return startupAdminRefusal(ctx, app, o, verb, adminSkipped, targets)
+			return startupAdminRefusal(ctx, app, o, verb, adminSkipped, adminReason, targets)
 		}
 		if refused > 0 {
 			return alreadyReported(ExitError, "%s cannot be %s", ui.Plural(refused, "entry", "entries"), past)
@@ -411,7 +417,7 @@ func runStartupChange(ctx context.Context, app *App, o startupOptions, enable bo
 	switch {
 	case app.interactive() && !o.yes:
 		ok, err := confirmCtx(ctx, app, fmt.Sprintf(" %s %s? %s", strings.ToUpper(verb[:1])+verb[1:],
-			ui.Plural(actionable, "entry", "entries"), "Only the StartupApproved value changes; this can be undone."))
+			ui.Plural(actionable, "entry", "entries"), "Only the StartupApproved value or a task's Enabled flag changes; this can be undone."))
 		if err != nil {
 			return err
 		}
@@ -452,7 +458,7 @@ func runStartupChange(ctx context.Context, app *App, o startupOptions, enable bo
 
 // startupAdminRefusal reports entries skipped for lack of administrator
 // rights and, interactively, offers an elevated window for them.
-func startupAdminRefusal(ctx context.Context, app *App, o startupOptions, verb string, n int, targets []startup.Entry) error {
+func startupAdminRefusal(ctx context.Context, app *App, o startupOptions, verb string, n int, reason string, targets []startup.Entry) error {
 	if app.interactive() && !o.yes && app.Sandbox == "" {
 		ok, err := confirmCtx(ctx, app, fmt.Sprintf(" %s %s in an elevated window? You will see a Windows permission prompt.",
 			strings.ToUpper(verb[:1])+verb[1:], ui.Plural(n, "entry", "entries")))
@@ -468,7 +474,7 @@ func startupAdminRefusal(ctx context.Context, app *App, o startupOptions, verb s
 			return nil
 		}
 	}
-	return alreadyReported(ExitError, "%s %s: %s", ui.Plural(n, "entry", "entries"), "not changed", startup.ReasonNeedsAdmin)
+	return alreadyReported(ExitError, "%s %s: %s", ui.Plural(n, "entry", "entries"), "not changed", reason)
 }
 
 func printStartupResults(app *App, results []startup.Result) {
@@ -509,8 +515,12 @@ func (a *App) recordStartup(results []startup.Result, enabled []startup.Entry) {
 		if before == "" {
 			before = "absent (enabled)"
 		}
-		c := history.Change{ID: r.Entry.ID, Name: r.Entry.Name, Action: action, Status: r.Status,
-			Detail: "StartupApproved before: " + before}
+		detail := "StartupApproved before: " + before
+		if r.TaskEnabledBefore != nil {
+			// A task has no approval value: record its own flag instead.
+			detail = fmt.Sprintf("scheduled task %s, Enabled before: %v", r.Entry.Location, *r.TaskEnabledBefore)
+		}
+		c := history.Change{ID: r.Entry.ID, Name: r.Entry.Name, Action: action, Status: r.Status, Detail: detail}
 		switch r.Status {
 		case startup.StatusFailed:
 			c.Error = r.Reason

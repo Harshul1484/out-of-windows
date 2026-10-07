@@ -1,9 +1,10 @@
 // Package repair turns doctor findings into user-level, reversible fixes:
 // removing missing, duplicate and empty entries from the current user's PATH
 // (after backing up the old value), and disabling startup entries whose
-// program no longer exists (through StartupApproved, like Task Manager). It
-// never changes the machine PATH or anything else machine-wide except
-// startup approvals, which need administrator rights.
+// program no longer exists (through StartupApproved, like Task Manager, or a
+// scheduled task's Enabled flag, like Task Scheduler). It never changes the
+// machine PATH or anything else machine-wide except startup approvals and
+// tasks, which need administrator rights.
 package repair
 
 import (
@@ -100,7 +101,7 @@ func NewPlan(user, machine *envpath.Report, entries []startup.Entry, elevated bo
 		f := Fix{ID: "startup:" + e.ID, Kind: KindStartup, Title: "Disable startup entry " + e.Name, Target: e.ID,
 			Reason: "its program is missing: " + e.Target, Selected: true, NeedsAdmin: e.NeedsAdmin, entry: e}
 		if e.NeedsAdmin && !elevated {
-			f.Selected, f.Review = false, startup.ReasonNeedsAdmin
+			f.Selected, f.Review = false, e.AdminReason()
 		}
 		p.Fixes = append(p.Fixes, f)
 	}

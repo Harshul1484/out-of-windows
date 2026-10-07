@@ -12,10 +12,11 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/Harshul1484/out-of-windows/internal/system"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
 // System reads startup entries of the running Windows system and writes only
-// StartupApproved values.
+// StartupApproved values and the Enabled flag of scheduled tasks.
 type System struct{}
 
 type regSource struct {
@@ -138,8 +139,29 @@ func (s System) List(ctx context.Context) ([]Entry, []string, error) {
 		}
 		raws = append(raws, r...)
 	}
+	if ctx.Err() != nil {
+		return nil, warnings, ctx.Err()
+	}
+	tr, tw := TaskRaws(ctx, tasks.System{})
+	raws, warnings = append(raws, tr...), append(warnings, tw...)
+	if ctx.Err() != nil {
+		return nil, warnings, ctx.Err()
+	}
 	return Build(raws, s.Resolver()), warnings, nil
 }
+
+// SetTaskEnabled switches the Enabled flag of the scheduled task behind e
+// through the Task Scheduler API (IRegisteredTask.Enabled), after checking
+// that the task still exists, and reads it back.
+func (System) SetTaskEnabled(e Entry, enabled bool) error {
+	if e.Task == nil {
+		return fmt.Errorf("%s is not a scheduled task", e.Name)
+	}
+	return TaskWriteError(tasks.System{}.SetEnabled(e.Task.Path, enabled))
+}
+
+// DecodeANSI decodes bytes in the system's ANSI code page (for ParseLink).
+func DecodeANSI(b []byte) (string, bool) { return ansiDecode(b) }
 
 // cpACP is the system ANSI code page identifier.
 const cpACP = 0

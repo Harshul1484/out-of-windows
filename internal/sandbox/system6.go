@@ -20,10 +20,12 @@ import (
 	"github.com/Harshul1484/out-of-windows/internal/safety"
 	"github.com/Harshul1484/out-of-windows/internal/startup"
 	"github.com/Harshul1484/out-of-windows/internal/system"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
 // The simulated registry and system state used by startup, doctor, optimize
-// and repair lives in JSON files under <root>\registry, next to apps.json.
+// and repair lives in JSON files under <root>\registry, next to apps.json;
+// tasks.json holds the simulated Task Scheduler library.
 
 func stateFile(root, name string) string { return filepath.Join(root, "registry", name) }
 
@@ -163,8 +165,56 @@ func (s Startup) List(ctx context.Context) ([]startup.Entry, []string, error) {
 		}
 		raws = append(raws, r...)
 	}
-	return startup.Build(raws, s.Resolver()), nil, nil
+	tr, warnings := startup.TaskRaws(ctx, Tasks{Root: s.Root})
+	return startup.Build(append(raws, tr...), s.Resolver()), warnings, nil
 }
+
+// SetTaskEnabled switches a simulated scheduled task's Enabled flag.
+func (s Startup) SetTaskEnabled(e startup.Entry, enabled bool) error {
+	if e.Task == nil {
+		return fmt.Errorf("%s is not a scheduled task", e.Name)
+	}
+	return startup.TaskWriteError(Tasks{Root: s.Root}.SetEnabled(e.Task.Path, enabled))
+}
+
+// Tasks simulates the Task Scheduler library (<root>\registry\tasks.json)
+// as seen by the simulated user.
+type Tasks struct{ Root string }
+
+// TaskAccount is the simulated user tasks are compared with.
+var TaskAccount = tasks.Account{SID: "S-1-5-21-1000-2000-3000-1001", Name: UserName, Domain: "SANDBOX"}
+
+func (s Tasks) file() string { return stateFile(s.Root, "tasks.json") }
+
+// List returns the simulated tasks.
+func (s Tasks) List(ctx context.Context) ([]tasks.Task, []string, error) {
+	var list []tasks.Task
+	if err := loadState(s.file(), &list); err != nil {
+		return nil, nil, err
+	}
+	if list == nil {
+		list = []tasks.Task{}
+	}
+	return list, nil, nil
+}
+
+// SetEnabled switches a simulated task's Enabled flag; nothing else changes.
+func (s Tasks) SetEnabled(path string, enabled bool) error {
+	var list []tasks.Task
+	if err := loadState(s.file(), &list); err != nil {
+		return err
+	}
+	for i := range list {
+		if strings.EqualFold(list[i].Path, path) {
+			list[i].Enabled = enabled
+			return saveState(s.file(), list)
+		}
+	}
+	return tasks.ErrNotFound
+}
+
+// Account returns the simulated user.
+func (s Tasks) Account() tasks.Account { return TaskAccount }
 
 // SetApproval writes a simulated StartupApproved value.
 func (s Startup) SetApproval(e startup.Entry, data []byte) error {
@@ -492,6 +542,27 @@ func dismReport(explorer, actual, shared, backups, cache string, packages int, r
 	return strings.Replace(strings.Join(lines, "\r\n"), "[====", "[==   4.0%    ]\r[====", 1)
 }
 
+// seedTasks is the simulated Task Scheduler library: a sign-in task of the
+// simulated user whose program is gone (broken; the user may switch it off),
+// a sign-in task that runs as SYSTEM (all users: needs administrator rights),
+// a Windows task that the startup list leaves out, and a daily task whose
+// rundll32 action loads a DLL from Old Editor's leftover folder, so that
+// folder is claimed (kept) while the task exists.
+func seedTasks(l safety.Locations) []tasks.Task {
+	logon := []tasks.Trigger{tasks.TriggerLogon}
+	return []tasks.Task{
+		{Path: `\Proseware\Old Editor Dictionary`, Enabled: false, Triggers: []tasks.Trigger{tasks.TriggerCalendar}, UserID: TaskAccount.SID,
+			Actions: []tasks.Action{{Command: `%SystemRoot%\System32\rundll32.exe`,
+				Arguments: `"` + filepath.Join(l.ProgramFiles, "OldEditor", "plugins", "spell.dll") + `",RefreshDictionary`}}},
+		{Path: `\Tailspin Sync`, Enabled: true, Triggers: logon, UserID: TaskAccount.SID, LogonUser: TaskAccount.Domain + `\` + UserName,
+			Actions: []tasks.Action{{Command: `%LOCALAPPDATA%\Programs\Tailspin Sync\tailspin.exe`, Arguments: "--background"}}},
+		{Path: `\Wingtip Toys\Wingtip Logon Check`, Enabled: true, Triggers: logon, UserID: "S-1-5-18", HighestPrivileges: true,
+			Actions: []tasks.Action{{Command: `%ProgramFiles(x86)%\Wingtip Toys\wingtip.exe`, Arguments: "/check"}}},
+		{Path: `\Microsoft\Windows\Shell\FamilySafetyMonitor`, Enabled: true, Triggers: logon, GroupID: "S-1-5-32-545",
+			Actions: []tasks.Action{{Command: `%windir%\System32\wpcmon.exe`}}},
+	}
+}
+
 // seedSystem writes the simulated startup entries, PATH values, system facts
 // and maintenance state, with a deterministic set of problems for doctor and
 // repair: a full D: drive, a pending restart, missing and duplicate PATH
@@ -553,6 +624,9 @@ func seedSystem(root string, l safety.Locations) error {
 		},
 	}
 	if err := saveState(stateFile(root, "startup.json"), st); err != nil {
+		return err
+	}
+	if err := saveState(stateFile(root, "tasks.json"), seedTasks(l)); err != nil {
 		return err
 	}
 

@@ -165,12 +165,20 @@ what was actually left. With `--yes`, only `high` confidence leftovers are moved
 }
 ```
 
-After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`.
+After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`, with
+`recycled_shortcuts` (the broken shortcuts moved with their folders; `[]` when none).
 
-- `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`.
+- `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`, `shortcut`.
+- `shortcut` evidence carries `shortcuts`: the shortcut files whose program (in `exes`) is gone.
+  Its `install_location` is the exact folder the program lived in (its parent when that folder is
+  `bin`, `x64` and the like); the shortcut's name is shown as `name` but never matched.
 - `confidence`: `high` (registered install folder, or two or more independent signals) or
-  `medium` (a single exact-name signal, and everything based on usage traces).
+  `medium` (a single exact-name signal, and everything based only on usage traces or shortcuts).
 - `needs_admin`: the folder is in Program Files or ProgramData and `oow` is not elevated.
+- A candidate's `shortcuts` (present when there are any) are broken shortcuts whose program lived
+  in it: `{"path", "target", "location", "removable", "note"}`. Only `removable` ones (the user's
+  own Start Menu and Desktop) go to the Recycle Bin, together with the folder; `note` says why
+  the others stay (the Start Menu and Desktop for all users are never changed).
 
 ## `oow analyze --json` — `oow.analyze/v1`
 
@@ -327,32 +335,55 @@ largest first, filtered by `--min-size`, at most `--top` entries.
       "approval": { "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
                     "value": "Contoso Agent", "data": "03000000008005e3e739dd01" },
       "toggleable": true, "needs_admin": false
+    },
+    {
+      "id": "task-logon:Tailspin Sync", "name": "Tailspin Sync", "source": "task-logon",
+      "source_label": "Scheduled task, at sign-in", "scope": "user", "location": "\\Tailspin Sync",
+      "command": "%LOCALAPPDATA%\\Programs\\Tailspin Sync\\tailspin.exe --background",
+      "target": "C:\\Users\\me\\AppData\\Local\\Programs\\Tailspin Sync\\tailspin.exe", "target_state": "missing",
+      "state": "enabled",
+      "task": { "path": "\\Tailspin Sync", "run_as": "S-1-5-21-...-1001", "triggers": ["logon"], "highest_privileges": false },
+      "toggleable": true, "needs_admin": false
     }
   ],
-  "summary": { "total": 12, "enabled": 9, "disabled": 2, "runs_once": 1, "broken": 3 },
+  "summary": { "total": 14, "enabled": 11, "disabled": 2, "runs_once": 1, "broken": 4 },
   "warnings": []
 }
 ```
 
 - `id` is `<source>:<name>` and is what `startup enable|disable` accepts (besides names).
   `source`: `hkcu-run`, `hkcu-runonce`, `hklm-run`, `hklm-run32`, `hklm-runonce`,
-  `hklm-runonce32`, `startup-folder`, `common-startup-folder`. `scope`: `user` or `machine`.
-- `location` is the registry key, or the file in the Startup folder. `command` is the Run value,
-  or a shortcut's target and arguments.
+  `hklm-runonce32`, `startup-folder`, `common-startup-folder`, `task-logon` (scheduled task with a
+  sign-in trigger), `task-boot` (scheduled task with a startup trigger and no sign-in trigger).
+  `scope`: `user` or `machine`.
+- `location` is the registry key, the file in the Startup folder, or the task's path in the Task
+  Scheduler library. `command` is the Run value, a shortcut's target and arguments, or the task's
+  first program action. A task's `name` is its path without the leading `\`.
+- `task` (task entries only): `path`, `run_as` (account or group; `SYSTEM`, `LOCAL SERVICE` and
+  `NETWORK SERVICE` by name), `triggers` (enabled triggers: `logon`, `boot`, `time`, `calendar`,
+  `idle`, `event`, `registration`, `session`, `other`), `highest_privileges`. Windows' own tasks
+  (the `\Microsoft\` folder) are not listed. A task has `scope: user` only when it is the user's
+  own: it runs as the user, at the user's sign-in, without highest privileges; every other task
+  is `machine` and needs administrator rights to change. A task of another account whose program
+  uses a per-user variable (`%LOCALAPPDATA%`, `%APPDATA%`, ...) is `unknown`, never `missing`.
 - `target_state`: `found`, `missing`, or `unknown` (bare program names found through PATH at run
   time, network and removable drives, shortcuts to shell items); `target_note` says why. Only a
   verified `missing` makes an entry broken; `summary.broken` counts enabled broken entries.
 - `state`: `enabled`, `disabled` or `runs-once` (RunOnce: cannot be toggled). `approval` is the
   StartupApproved value that holds the state; `data` is its hex bytes, `""` when absent (enabled).
-- `needs_admin`: the entry starts for all users, so changing it needs administrator rights.
+  Task entries have no `approval`: their state is the task's own Enabled flag.
+- `needs_admin`: the entry starts for all users (or is another account's task), so changing it
+  needs administrator rights.
 
 ## `oow startup enable|disable --json` — `oow.startup-change/v1`
 
 `{"schema", "action": "enable"|"disable", "dry_run", "sandbox", "elevated", "results": [{"entry",
-"status", "reason", "before", "after"}]}` with `entry` as in `oow.startup/v1` (after the change).
-`status`: `planned` (dry run), `changed`, `unchanged` (already in that state), `skipped` (RunOnce,
-or needs administrator; see `reason`), `failed`. `before`/`after` are the approval values in hex.
-Exit code 1 when an entry was skipped or failed, 4 without `--yes` when not interactive.
+"status", "reason", "before", "after", "task_enabled_before"}]}` with `entry` as in `oow.startup/v1`
+(after the change). `status`: `planned` (dry run), `changed`, `unchanged` (already in that state),
+`skipped` (RunOnce, or needs administrator; see `reason`), `failed`. `before`/`after` are the
+approval values in hex; task entries have neither and carry `task_enabled_before` (the task's
+Enabled flag before the change) instead. Exit code 1 when an entry was skipped or failed, 4
+without `--yes` when not interactive.
 
 ## `oow doctor --json` — `oow.doctor/v1`
 
