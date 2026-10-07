@@ -303,18 +303,37 @@ type optimizeDoc struct {
 		Task struct {
 			ID string `json:"id"`
 		} `json:"task"`
-		Status      string `json:"status"`
-		Selected    bool   `json:"selected"`
-		BytesBefore int64  `json:"bytes_before"`
+		Status         string `json:"status"`
+		Reason         string `json:"reason"`
+		Selected       bool   `json:"selected"`
+		BytesBefore    int64  `json:"bytes_before"`
+		ComponentStore *struct {
+			ActualBytes         int64 `json:"actual_bytes"`
+			BackupsBytes        int64 `json:"backups_bytes"`
+			ReclaimablePackages int   `json:"reclaimable_packages"`
+			Recommended         bool  `json:"cleanup_recommended"`
+		} `json:"component_store"`
 	} `json:"tasks"`
 	Notes []struct {
 		ID string `json:"id"`
 	} `json:"notes"`
 	Results []struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-		Freed  int64  `json:"freed_bytes"`
+		ID             string `json:"id"`
+		Status         string `json:"status"`
+		Message        string `json:"message"`
+		Freed          int64  `json:"freed_bytes"`
+		BytesAfter     int64  `json:"bytes_after"`
+		ComponentStore *struct {
+			Recommended bool `json:"cleanup_recommended"`
+		} `json:"component_store"`
 	} `json:"results"`
+}
+
+type simOptimizeState struct {
+	DNSFlushes           int      `json:"dns_flushes"`
+	Retrimmed            []string `json:"retrimmed"`
+	ComponentCleanups    int      `json:"component_cleanups"`
+	ComponentStoreReport string   `json:"component_store_report"`
 }
 
 func TestOptimizePreviewConfirmAndRun(t *testing.T) {
@@ -322,13 +341,17 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 	before := e.state()
 	out, _, code := e.run("optimize", "--dry-run", "--json")
 	d := decode[optimizeDoc](t, out)
-	if code != 0 || d.Schema != "oow.optimize/v1" || !d.DryRun || len(d.Tasks) != 3 || d.Results != nil {
+	if code != 0 || d.Schema != "oow.optimize/v1" || !d.DryRun || len(d.Tasks) != 4 || d.Results != nil {
 		t.Fatalf("dry run (code %d): %s", code, out)
 	}
 	for _, it := range d.Tasks {
 		if it.Status != "ready" || !it.Selected {
 			t.Errorf("task %+v", it)
 		}
+	}
+	if cs := d.Tasks[3].ComponentStore; d.Tasks[3].Task.ID != "optimize.component-store" || cs == nil || !cs.Recommended ||
+		cs.ReclaimablePackages != 4 || cs.ActualBytes != 6979321856 || d.Tasks[3].BytesBefore != cs.ActualBytes {
+		t.Errorf("component store = %+v", d.Tasks[3])
 	}
 	notes := map[string]bool{}
 	for _, n := range d.Notes {
@@ -352,7 +375,7 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 	t.Setenv("OOW_DRY_RUN", "")
 	out, _, code = e.run("optimize", "--yes", "--json")
 	d = decode[optimizeDoc](t, out)
-	if code != 0 || len(d.Results) != 3 {
+	if code != 0 || len(d.Results) != 4 {
 		t.Fatalf("run (code %d): %s", code, out)
 	}
 	for _, r := range d.Results {
@@ -360,12 +383,14 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 			t.Errorf("result %+v", r)
 		}
 	}
-	var st struct {
-		DNSFlushes int      `json:"dns_flushes"`
-		Retrimmed  []string `json:"retrimmed"`
+	// 6.50 GB before, 5.25 GB after (measured by analyzing again).
+	if r := d.Results[3]; r.Freed != 1342177280 || r.BytesAfter != 5637144576 || r.ComponentStore == nil ||
+		r.ComponentStore.Recommended || !strings.Contains(r.Message, "1.2 GB freed") {
+		t.Errorf("component store result = %+v", r)
 	}
+	var st simOptimizeState
 	e.registry("optimize.json", &st)
-	if st.DNSFlushes != 1 || len(st.Retrimmed) != 1 || st.Retrimmed[0] != `C:\` {
+	if st.DNSFlushes != 1 || len(st.Retrimmed) != 1 || st.Retrimmed[0] != `C:\` || st.ComponentCleanups != 1 {
 		t.Errorf("simulated state = %+v", st)
 	}
 	if entries, _ := os.ReadDir(sandbox.DOCacheDir(e.root)); len(entries) != 0 {
@@ -375,8 +400,72 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 		t.Error("system file removed")
 	}
 	hist, _, _ := e.run("history", "--json")
-	if !strings.Contains(hist, `"command": "optimize"`) || !strings.Contains(hist, `"reclaimed_bytes": 5000000`) {
+	// Delivery Optimization (5 MB) plus the component store (1.25 GB).
+	if !strings.Contains(hist, `"command": "optimize"`) || !strings.Contains(hist, `"reclaimed_bytes": 1347177280`) {
 		t.Errorf("history = %s", hist)
+	}
+	// DISM no longer recommends a cleanup: nothing to do.
+	out, _, _ = e.run("optimize", "--task", "component-store", "--dry-run", "--json")
+	if d := decode[optimizeDoc](t, out); len(d.Tasks) != 1 || d.Tasks[0].Status != "not-applicable" || d.Tasks[0].Selected ||
+		!strings.Contains(d.Tasks[0].Reason, "DISM does not recommend a cleanup") {
+		t.Errorf("after cleanup: %s", out)
+	}
+}
+
+func TestOptimizeComponentStoreText(t *testing.T) {
+	e := newEnv(t)
+	text, _, code := e.run("optimize", "--task", "component-store", "--dry-run")
+	for _, want := range []string{"Clean up the component store (WinSxS)", "store 6.5 GB, overhead 2.4 GB, 4 reclaimable packages",
+		"StartComponentCleanup", "/ResetBase", "Ctrl+C", "Dry run: nothing was run"} {
+		if code != 0 || !strings.Contains(text, want) {
+			t.Errorf("missing %q (code %d):\n%s", want, code, text)
+		}
+	}
+	help, _, _ := e.run("optimize", "--help")
+	for _, want := range []string{"component-store", "SoftwareDistribution\\Download) is not cleaned", "left to finish"} {
+		if !strings.Contains(help, want) {
+			t.Errorf("help lacks %q:\n%s", want, help)
+		}
+	}
+}
+
+// A DISM report that cannot be read (here: localized) makes the task
+// unavailable; --yes runs the other tasks and never the cleanup.
+func TestOptimizeUnreadableDISMReportNeverRuns(t *testing.T) {
+	e := newEnv(t)
+	path := filepath.Join(e.root, "registry", "optimize.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	report := raw["component_store_report"].(string)
+	raw["component_store_report"] = strings.ReplaceAll(strings.ReplaceAll(report,
+		"Component Store Cleanup Recommended : Yes", "Bereinigung des Komponentenspeichers empfohlen : Ja"),
+		"Actual Size of Component Store", "Tatsächliche Größe des Komponentenspeichers")
+	if data, err = json.Marshal(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := e.run("optimize", "--yes", "--json")
+	d := decode[optimizeDoc](t, out)
+	if code != 0 || len(d.Results) != 3 {
+		t.Fatalf("run (code %d): %s", code, out)
+	}
+	it := d.Tasks[3]
+	if it.Status != "unavailable" || it.Selected || it.ComponentStore != nil || it.BytesBefore != -1 ||
+		!strings.Contains(it.Reason, "could not be read") {
+		t.Errorf("unreadable report = %+v", it)
+	}
+	var st simOptimizeState
+	e.registry("optimize.json", &st)
+	if st.ComponentCleanups != 0 {
+		t.Error("the cleanup ran without a readable recommendation")
 	}
 }
 

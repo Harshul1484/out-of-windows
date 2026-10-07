@@ -1,6 +1,7 @@
 package optimize
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 	"github.com/Harshul1484/out-of-windows/internal/filesystem"
 	"github.com/Harshul1484/out-of-windows/internal/system"
 )
@@ -167,6 +169,84 @@ func (System) ReTrim(ctx context.Context, v Volume) error {
 	}
 	_, err := powershell(ctx, 15*time.Minute, "Optimize-Volume -DriveLetter "+strings.ToUpper(v.Root[:1])+" -ReTrim")
 	return err
+}
+
+// AnalyzeComponentStore runs DISM's read-only analysis of the component
+// store. If ctx is cancelled oow stops waiting; the analysis changes nothing
+// and finishes on its own.
+func (System) AnalyzeComponentStore(ctx context.Context) (ComponentStore, error) {
+	out, exit, err := runDISM(ctx, dismAnalyzeTimeout, true, dismAnalyzeArgs)
+	if err != nil {
+		return ComponentStore{}, err
+	}
+	if exit != 0 {
+		return ComponentStore{}, dismError(out, exit)
+	}
+	return ParseComponentStoreReport(out)
+}
+
+// CleanupComponentStore runs DISM /StartComponentCleanup and waits for it.
+// Cancelling ctx does not stop DISM or the wait: a servicing operation is
+// never interrupted midway.
+func (System) CleanupComponentStore(ctx context.Context) (restart bool, err error) {
+	out, exit, err := runDISM(ctx, dismCleanupTimeout, false, dismCleanupArgs)
+	switch {
+	case err != nil:
+		return false, err
+	case exit == dismRestartRequired:
+		return true, nil
+	case exit != 0:
+		return false, dismError(out, exit)
+	}
+	return false, nil
+}
+
+// runDISM starts Dism.exe from System32 by full path (never from PATH), with
+// fixed arguments, hidden, in its own console and process group so Ctrl+C in
+// oow's console never reaches it. oow never terminates DISM: when the time
+// limit passes (or ctx is cancelled and stopOnCancel is set) it stops waiting
+// and DISM finishes on its own.
+func runDISM(ctx context.Context, timeout time.Duration, stopOnCancel bool, args []string) ([]byte, uint32, error) {
+	if stopOnCancel && ctx.Err() != nil {
+		return nil, 0, ctx.Err()
+	}
+	exe := filepath.Join(system.SystemDir(), "Dism.exe")
+	if fi, err := os.Stat(exe); err != nil || !fi.Mode().IsRegular() {
+		return nil, 0, ErrNoDISM
+	}
+	var isWow64 bool
+	if windows.IsWow64Process(windows.CurrentProcess(), &isWow64) == nil && isWow64 {
+		return nil, 0, errors.New("a 32-bit build cannot run the 64-bit DISM: use the 64-bit " + buildinfo.Name)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true,
+		CreationFlags: windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		return nil, 0, fmt.Errorf("could not start DISM: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var cancelled <-chan struct{}
+	if stopOnCancel {
+		cancelled = ctx.Done()
+	}
+	select {
+	case err := <-done:
+		var ee *exec.ExitError
+		if err != nil && !errors.As(err, &ee) {
+			return out.Bytes(), 0, fmt.Errorf("DISM: %w", err)
+		}
+		return out.Bytes(), uint32(cmd.ProcessState.ExitCode()), nil
+	case <-cancelled:
+		return nil, 0, ctx.Err()
+	case <-timer.C:
+		return nil, 0, fmt.Errorf("DISM did not finish within %s and was left running (stopping it midway is not safe); "+
+			"run `%s optimize --dry-run` later to see the result", timeout, buildinfo.Name)
+	}
 }
 
 // powershell runs a fixed script with Windows PowerShell from System32 (not

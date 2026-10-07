@@ -38,13 +38,22 @@ func newOptimizeCmd(app *App) *cobra.Command {
 		Short:   "Run bounded, explained maintenance tasks",
 		GroupID: "system",
 		Long: "Run a short list of maintenance tasks through Windows' own interfaces: flush the DNS\n" +
-			"resolver cache, clear the Delivery Optimization cache (administrator), and retrim SSD\n" +
-			"volumes (administrator). Each task says what it does, why, and what changes afterwards.\n" +
-			"None of them makes Windows faster on its own, and none deletes your files.\n\n" +
+			"resolver cache, clear the Delivery Optimization cache (administrator), retrim SSD\n" +
+			"volumes (administrator), and clean up the component store (WinSxS) with DISM when DISM's\n" +
+			"analysis recommends it (administrator; never /ResetBase). Each task says what it does,\n" +
+			"why, and what changes afterwards. None of them makes Windows faster on its own, and none\n" +
+			"deletes your files.\n\n" +
+			"The component store analysis takes a few minutes and the cleanup can take over an hour.\n" +
+			"Ctrl+C stops before the next task; a DISM cleanup that has started is left to finish,\n" +
+			"because stopping it midway is not safe.\n\n" +
+			"The Windows Update download cache (SoftwareDistribution\\Download) is not cleaned: Windows\n" +
+			"Update manages it, and Windows offers no supported way to clear it without stopping the\n" +
+			"update services and deleting files.\n\n" +
 			"Pending restarts, update settings and low disk space are shown for information; " + buildinfo.Name + "\n" +
 			"never restarts Windows or changes update settings.",
 		Example: "  " + buildinfo.Name + " optimize --dry-run\n" +
 			"  " + buildinfo.Name + " optimize --task dns-flush --yes\n" +
+			"  " + buildinfo.Name + " optimize --task component-store --dry-run   # DISM's analysis (administrator)\n" +
 			"  " + buildinfo.Name + " optimize --dry-run --json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,7 +65,7 @@ func newOptimizeCmd(app *App) *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVarP(&o.dryRun, "dry-run", "n", false, "show the plan without running anything")
 	f.BoolVarP(&o.yes, "yes", "y", false, "run the ready tasks without asking (required for non-interactive use)")
-	f.StringSliceVar(&o.tasks, "task", nil, "only these tasks (dns-flush, delivery-optimization, ssd-retrim)")
+	f.StringSliceVar(&o.tasks, "task", nil, "only these tasks ("+strings.Join(optimize.ShortIDs(), ", ")+")")
 	f.BoolVar(&o.pause, "pause", false, "wait for Enter before exiting (used for elevated windows)")
 	_ = f.MarkHidden("pause")
 	return cmd
@@ -86,9 +95,13 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 	}
 	tasks, err := optimize.Select(o.tasks)
 	if err != nil {
-		return withCode(ExitUsage, "%v (tasks: dns-flush, delivery-optimization, ssd-retrim)", err)
+		return withCode(ExitUsage, "%v (tasks: %s)", err, strings.Join(optimize.ShortIDs(), ", "))
 	}
-	spin := ui.StartSpinner(app.Err, app.tty(), func() string { return "Preparing maintenance tasks" })
+	preparing := "Preparing maintenance tasks"
+	if app.Elevated && hasTask(tasks, optimize.TaskComponentStore) {
+		preparing += " (DISM is analyzing the component store; this can take a few minutes)"
+	}
+	spin := ui.StartSpinner(app.Err, app.tty(), func() string { return preparing })
 	plan := optimize.Plan(ctx, app.optimizer(), app.Elevated, tasks)
 	notes := optimizeNotes(app)
 	spin.Stop()
@@ -155,9 +168,38 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 		return withCode(ExitNeedsConfirm, "refusing to run maintenance tasks without confirmation: pass --yes, or use --dry-run to preview")
 	}
 
-	spin = ui.StartSpinner(app.Err, app.tty(), func() string { return "Running maintenance tasks" })
+	running, stopping := "Running maintenance tasks", "Stopping after the current task"
+	dism := false
+	for _, it := range plan {
+		if it.Selected && it.Status == optimize.Ready && it.Task.ID == optimize.TaskComponentStore {
+			dism = true
+			running += " (the component store cleanup can take over an hour)"
+			stopping += "; a DISM cleanup that has started is left to finish, because stopping it midway is not safe " +
+				"(Ctrl+C again stops waiting; DISM keeps running)"
+		}
+	}
+	spin = ui.StartSpinner(app.Err, app.tty(), func() string {
+		if ctx.Err() != nil {
+			return stopping
+		}
+		return running
+	})
+	// Without a spinner, say once why Ctrl+C does not return at once.
+	finished, noted := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(noted)
+		select {
+		case <-ctx.Done():
+			if dism && !app.tty() {
+				fmt.Fprintf(app.Err, "\n %s.\n", stopping)
+			}
+		case <-finished:
+		}
+	}()
 	start := time.Now()
 	results := optimize.Run(ctx, app.optimizer(), plan)
+	close(finished)
+	<-noted
 	spin.Stop()
 	recordOptimize(app, results, time.Since(start))
 	doc["tasks"] = plan
@@ -185,6 +227,15 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 		return alreadyReported(ExitError, "%s did not complete", ui.Plural(failed, "task", "tasks"))
 	}
 	return nil
+}
+
+func hasTask(tasks []*optimize.Task, id string) bool {
+	for _, t := range tasks {
+		if t.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func optimizeStatusLabel(it optimize.Item) string {
@@ -217,6 +268,10 @@ func printOptimizePlan(app *App, plan []optimize.Item, notes []doctor.Check) {
 				roots = append(roots, v.Root)
 			}
 			extra = "  " + ui.Muted.Render(strings.Join(roots, " "))
+		}
+		if cs := it.ComponentStore; cs != nil {
+			extra = "  " + ui.Muted.Render(fmt.Sprintf("store %s, overhead %s, %s", ui.Bytes(cs.ActualBytes),
+				ui.Bytes(cs.OverheadBytes()), ui.Plural(cs.ReclaimablePackages, "reclaimable package", "reclaimable packages")))
 		}
 		app.printf("   %s %s  %s%s\n", mark, ui.Bold.Render(it.Task.Name), optimizeStatusLabel(it), extra)
 		if it.Reason != "" && it.Status != optimize.Ready {

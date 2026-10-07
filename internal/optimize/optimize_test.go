@@ -3,10 +3,13 @@ package optimize_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Harshul1484/out-of-windows/internal/optimize"
+	"github.com/Harshul1484/out-of-windows/internal/system"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 )
 
@@ -22,8 +25,44 @@ type fake struct {
 	cancelAfter int // cancel the context after this many retrims (0 = never)
 	cancel      context.CancelFunc
 
-	flushed, cleared int
-	trimmed          []string
+	// Component store: the report before and after a cleanup (nil: csErr).
+	cs, csAfter     *optimize.ComponentStore
+	csErr           error
+	cleanupErr      error
+	cleanupRestart  bool
+	cancelInCleanup bool // the user presses Ctrl+C while DISM runs
+
+	flushed, cleared    int
+	trimmed             []string
+	analyses, cleanups  int
+	cleanupSawCancelled bool
+}
+
+func (f *fake) AnalyzeComponentStore(ctx context.Context) (optimize.ComponentStore, error) {
+	f.analyses++
+	if ctx.Err() != nil {
+		return optimize.ComponentStore{}, ctx.Err()
+	}
+	if f.cleanups > 0 && f.csAfter != nil {
+		return *f.csAfter, nil
+	}
+	if f.cs == nil {
+		if f.csErr == nil {
+			return optimize.ComponentStore{}, optimize.ErrNoDISM
+		}
+		return optimize.ComponentStore{}, f.csErr
+	}
+	return *f.cs, nil
+}
+
+func (f *fake) CleanupComponentStore(ctx context.Context) (bool, error) {
+	f.cleanups++
+	if f.cancelInCleanup {
+		f.cancel()
+		// The real runner keeps waiting for DISM after a cancel.
+		f.cleanupSawCancelled = ctx.Err() != nil
+	}
+	return f.cleanupRestart, f.cleanupErr
 }
 
 func (f *fake) FlushDNS(context.Context) error { f.flushed++; return f.flushErr }
@@ -51,7 +90,11 @@ func (f *fake) ReTrim(_ context.Context, v optimize.Volume) error {
 }
 
 func ready() *fake {
-	return &fake{doAvailable: true, doBytes: 300 << 20, ssds: []optimize.Volume{{Root: `C:\`, FileSystem: "NTFS"}}}
+	return &fake{doAvailable: true, doBytes: 300 << 20, ssds: []optimize.Volume{{Root: `C:\`, FileSystem: "NTFS"}},
+		cs: &optimize.ComponentStore{ActualBytes: 10 << 30, ExplorerBytes: -1, SharedBytes: -1, BackupsBytes: 4 << 30,
+			CacheBytes: 1 << 20, ReclaimablePackages: 3, Recommended: true},
+		csAfter: &optimize.ComponentStore{ActualBytes: 7 << 30, ExplorerBytes: -1, SharedBytes: -1, BackupsBytes: 1 << 30},
+	}
 }
 
 func statuses(items []optimize.Item) map[string]optimize.Item {
@@ -85,17 +128,130 @@ func TestPlanNotElevated(t *testing.T) {
 	if it := plan[optimize.TaskDNS]; it.Status != optimize.Ready || !it.Selected {
 		t.Errorf("dns = %+v", it)
 	}
-	for _, id := range []string{optimize.TaskDO, optimize.TaskReTrim} {
+	for _, id := range []string{optimize.TaskDO, optimize.TaskReTrim, optimize.TaskComponentStore} {
 		it := plan[id]
 		if it.Status != optimize.NeedsAdmin || it.Selected || !strings.Contains(it.Reason, "elevated terminal") {
 			t.Errorf("%s = %+v", id, it)
 		}
 	}
-	if plan[optimize.TaskDO].BytesBefore != -1 {
-		t.Error("cache size must be unknown without administrator rights")
+	if plan[optimize.TaskDO].BytesBefore != -1 || plan[optimize.TaskComponentStore].BytesBefore != -1 {
+		t.Error("sizes must be unknown without administrator rights")
 	}
-	if f.flushed+f.cleared+len(f.trimmed) != 0 {
+	if plan[optimize.TaskComponentStore].ComponentStore != nil || f.analyses != 0 {
+		t.Error("DISM's analysis needs administrator rights and must not be attempted")
+	}
+	if f.flushed+f.cleared+len(f.trimmed)+f.cleanups != 0 {
 		t.Fatal("Plan ran something")
+	}
+}
+
+func TestPlanComponentStore(t *testing.T) {
+	f := ready()
+	it := statuses(optimize.Plan(context.Background(), f, true, optimize.Tasks()))[optimize.TaskComponentStore]
+	if it.Status != optimize.Ready || !it.Selected || it.ComponentStore == nil || it.BytesBefore != 10<<30 || f.analyses != 1 {
+		t.Errorf("recommended = %+v (analyses %d)", it, f.analyses)
+	}
+
+	f.cs.Recommended, f.cs.ReclaimablePackages = false, 0
+	it = statuses(optimize.Plan(context.Background(), f, true, optimize.Tasks()))[optimize.TaskComponentStore]
+	if it.Status != optimize.NotApplicable || it.Selected || it.ComponentStore == nil ||
+		!strings.Contains(it.Reason, "DISM does not recommend a cleanup (0 reclaimable packages)") {
+		t.Errorf("not recommended = %+v", it)
+	}
+
+	// An unreadable report, a DISM failure or a missing DISM: never ready.
+	for _, err := range []error{
+		fmt.Errorf("%w: no %q line", optimize.ErrUnreadableReport, "Component Store Cleanup Recommended"),
+		errors.New("DISM error 0x800f0806: pending"),
+		optimize.ErrNoDISM,
+	} {
+		f = ready()
+		f.cs, f.csErr = nil, err
+		it = statuses(optimize.Plan(context.Background(), f, true, optimize.Tasks()))[optimize.TaskComponentStore]
+		if it.Status != optimize.Unavailable || it.Selected || it.ComponentStore != nil || it.BytesBefore != -1 ||
+			!strings.Contains(it.Reason, err.Error()) || !strings.Contains(it.Reason, "only when DISM's analysis recommends it") {
+			t.Errorf("%v: %+v", err, it)
+		}
+		// Even if a caller marks it selected, it never runs.
+		plan := optimize.Plan(context.Background(), f, true, optimize.Tasks())
+		for i := range plan {
+			plan[i].Selected = true
+		}
+		optimize.Run(context.Background(), f, plan)
+		if f.cleanups != 0 {
+			t.Errorf("%v: cleanup ran without a recommendation", err)
+		}
+	}
+}
+
+func componentResult(t *testing.T, f *fake, ctx context.Context) optimize.Result {
+	t.Helper()
+	plan := optimize.Plan(context.Background(), f, true, []*optimize.Task{optimize.Tasks()[3]})
+	res := optimize.Run(ctx, f, plan)
+	if len(res) != 1 || res[0].ID != optimize.TaskComponentStore {
+		t.Fatalf("results = %+v", res)
+	}
+	return res[0]
+}
+
+func TestRunComponentStore(t *testing.T) {
+	f := ready()
+	r := componentResult(t, f, context.Background())
+	if r.Status != optimize.Done || f.cleanups != 1 || f.analyses != 2 || r.BytesBefore != 10<<30 || r.BytesAfter != 7<<30 ||
+		r.Freed != 3<<30 || r.ComponentStore == nil || r.RestartRequired ||
+		!strings.Contains(r.Message, "3.0 GB freed; the store is now 7.0 GB, 0 reclaimable packages left") {
+		t.Errorf("done = %+v", r)
+	}
+
+	f = ready()
+	f.cleanupErr = errors.New("DISM error 0x800f0806: pending")
+	if r := componentResult(t, f, context.Background()); r.Status != optimize.Failed || r.Freed != 0 || f.analyses != 1 ||
+		!strings.Contains(r.Message, "0x800f0806") {
+		t.Errorf("failed = %+v (analyses %d)", r, f.analyses)
+	}
+
+	f = ready()
+	f.cleanupRestart = true
+	if r := componentResult(t, f, context.Background()); r.Status != optimize.Done || !r.RestartRequired ||
+		!strings.Contains(r.Message, "Windows needs a restart to finish it") {
+		t.Errorf("restart = %+v", r)
+	}
+
+	// The store cannot be measured afterwards: done, nothing claimed as freed.
+	f = ready()
+	f.csAfter = nil
+	f.cs = nil
+	plan := []optimize.Item{{Task: optimize.Tasks()[3], Status: optimize.Ready, Selected: true, BytesBefore: 10 << 30}}
+	f.csErr = fmt.Errorf("%w: no line", optimize.ErrUnreadableReport)
+	res := optimize.Run(context.Background(), f, plan)
+	if r := res[0]; r.Status != optimize.Done || r.Freed != 0 || r.BytesAfter != -1 || r.ComponentStore != nil ||
+		!strings.Contains(r.Message, "could not be measured") {
+		t.Errorf("unmeasured = %+v", r)
+	}
+}
+
+// Ctrl+C while DISM cleans up: the cleanup is left to finish and reported as
+// done, nothing is measured or started afterwards.
+func TestRunComponentStoreCancelLeavesDISMToFinish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := ready()
+	f.cancelInCleanup, f.cancel = true, cancel
+	plan := optimize.Plan(context.Background(), f, true, optimize.Tasks())
+	// The component store first, then the others.
+	plan = []optimize.Item{plan[3], plan[0], plan[1], plan[2]}
+	res := optimize.Run(ctx, f, plan)
+	if f.cleanups != 1 || !f.cleanupSawCancelled || f.analyses != 1 || f.flushed+f.cleared+len(f.trimmed) != 0 {
+		t.Fatalf("cleanups=%d analyses=%d flushed=%d cleared=%d trimmed=%v", f.cleanups, f.analyses, f.flushed, f.cleared, f.trimmed)
+	}
+	r := res[0]
+	if r.Status != optimize.Done || r.Freed != 0 || r.BytesAfter != -1 ||
+		!strings.Contains(r.Message, "left to finish after the cancel (stopping it midway is not safe)") {
+		t.Errorf("component store = %+v", r)
+	}
+	for _, r := range res[1:] {
+		if r.Status != optimize.Cancelled {
+			t.Errorf("after cancel: %+v", r)
+		}
 	}
 }
 
@@ -130,12 +286,12 @@ func TestRunOnlySelectedReadyTasks(t *testing.T) {
 	f := ready()
 	plan := optimize.Plan(context.Background(), f, true, optimize.Tasks())
 	for i := range plan {
-		if plan[i].Task.ID == optimize.TaskReTrim {
+		if plan[i].Task.ID == optimize.TaskReTrim || plan[i].Task.ID == optimize.TaskComponentStore {
 			plan[i].Selected = false
 		}
 	}
 	res := optimize.Run(context.Background(), f, plan)
-	if len(res) != 2 || f.flushed != 1 || f.cleared != 1 || len(f.trimmed) != 0 {
+	if len(res) != 2 || f.flushed != 1 || f.cleared != 1 || len(f.trimmed) != 0 || f.cleanups != 0 {
 		t.Fatalf("results = %+v, flushed=%d cleared=%d trimmed=%v", res, f.flushed, f.cleared, f.trimmed)
 	}
 	do := res[1]
@@ -150,7 +306,7 @@ func TestRunOnlySelectedReadyTasks(t *testing.T) {
 		plan[i].Selected = true
 	}
 	res = optimize.Run(context.Background(), f, plan)
-	if len(res) != 1 || f.cleared != 0 || len(f.trimmed) != 0 {
+	if len(res) != 1 || f.cleared != 0 || len(f.trimmed) != 0 || f.cleanups != 0 || f.analyses != 0 {
 		t.Errorf("admin tasks ran without elevation: %+v", res)
 	}
 }
@@ -161,6 +317,7 @@ func TestRunFailuresAndPartialRetrim(t *testing.T) {
 	f.clearErr = errors.New("cmdlet failed")
 	f.ssds = []optimize.Volume{{Root: `C:\`}, {Root: `D:\`}}
 	f.trimErr = map[string]error{`D:\`: errors.New("not supported")}
+	f.cleanupErr = errors.New("DISM error 0x800f0806")
 	res := optimize.Run(context.Background(), f, optimize.Plan(context.Background(), f, true, optimize.Tasks()))
 	got := map[string]optimize.Result{}
 	for _, r := range res {
@@ -176,6 +333,9 @@ func TestRunFailuresAndPartialRetrim(t *testing.T) {
 		!strings.Contains(r.Message, `D:\ failed`) {
 		t.Errorf("retrim = %+v", r)
 	}
+	if r := got[optimize.TaskComponentStore]; r.Status != optimize.Failed || r.Message != "DISM error 0x800f0806" {
+		t.Errorf("component store = %+v", r)
+	}
 }
 
 func TestRunStopsOnCancel(t *testing.T) {
@@ -187,8 +347,8 @@ func TestRunStopsOnCancel(t *testing.T) {
 	// Retrim first, then the others.
 	plan = []optimize.Item{plan[2], plan[0], plan[1]}
 	res := optimize.Run(ctx, f, plan)
-	if len(f.trimmed) != 1 || f.flushed != 0 || f.cleared != 0 {
-		t.Fatalf("ran after cancel: trimmed=%v flushed=%d cleared=%d", f.trimmed, f.flushed, f.cleared)
+	if len(f.trimmed) != 1 || f.flushed != 0 || f.cleared != 0 || f.cleanups != 0 {
+		t.Fatalf("ran after cancel: trimmed=%v flushed=%d cleared=%d cleanups=%d", f.trimmed, f.flushed, f.cleared, f.cleanups)
 	}
 	if res[0].Status != optimize.Partial || res[1].Status != optimize.Cancelled || res[2].Status != optimize.Cancelled {
 		t.Errorf("results = %+v", res)
@@ -201,10 +361,11 @@ func TestSelect(t *testing.T) {
 		want    int
 		err     bool
 	}{
-		{nil, 3, false},
+		{nil, 4, false},
 		{[]string{"dns-flush"}, 1, false},
 		{[]string{"optimize.ssd-retrim", "delivery-optimization"}, 2, false},
-		{[]string{"optimize"}, 3, false},
+		{[]string{"component-store"}, 1, false},
+		{[]string{"optimize"}, 4, false},
 		{[]string{"nope"}, 0, true},
 	} {
 		got, err := optimize.Select(c.filters)
@@ -226,5 +387,30 @@ func TestRealSystemReadOnly(t *testing.T) {
 	t.Logf("SSD volumes: %+v; Delivery Optimization: %+v", vols, c)
 	if c.Bytes != -1 {
 		t.Error("the cache must not be measured without elevation")
+	}
+}
+
+// Read-only: DISM's analysis on the real system. Without elevation DISM
+// refuses at once (error 740, no prompt); elevated (CI) its real English
+// report must parse. The cleanup is never run here.
+func TestRealSystemComponentStoreAnalysis(t *testing.T) {
+	testutil.SkipUnlessRealSystem(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Minute)
+	defer cancel()
+	cs, err := optimize.System{}.AnalyzeComponentStore(ctx)
+	switch {
+	case !system.IsElevated():
+		if err == nil || !strings.Contains(err.Error(), "DISM error 740") {
+			t.Errorf("not elevated: %+v, %v", cs, err)
+		}
+	case ctx.Err() != nil:
+		t.Skip("the analysis did not finish within 7 minutes (DISM was left to finish)")
+	case err != nil:
+		t.Fatalf("DISM's real report did not parse: %v", err)
+	default:
+		t.Logf("component store: %+v (overhead %d bytes)", cs, cs.OverheadBytes())
+		if cs.ActualBytes <= 0 || cs.ExplorerBytes < cs.ActualBytes/2 {
+			t.Errorf("implausible report: %+v", cs)
+		}
 	}
 }

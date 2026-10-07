@@ -307,6 +307,12 @@ type simOptimize struct {
 	Retrimmed   []string          `json:"retrimmed"`
 	SSDs        []optimize.Volume `json:"ssd_volumes"`
 	DOAvailable bool              `json:"do_available"`
+	// ComponentStoreReport is the text the simulated DISM prints for
+	// /AnalyzeComponentStore (empty: no DISM); a cleanup replaces it with
+	// ComponentStoreAfter and is counted.
+	ComponentStoreReport string `json:"component_store_report"`
+	ComponentStoreAfter  string `json:"component_store_after"`
+	ComponentCleanups    int    `json:"component_cleanups"`
 }
 
 func (o Optimizer) file() string { return stateFile(o.Root, "optimize.json") }
@@ -411,6 +417,56 @@ func (o Optimizer) ReTrim(ctx context.Context, v optimize.Volume) error {
 	}
 	s.Retrimmed = append(s.Retrimmed, v.Root)
 	return saveState(o.file(), s)
+}
+
+// AnalyzeComponentStore reads the simulated DISM report through the same
+// parser as the real one.
+func (o Optimizer) AnalyzeComponentStore(ctx context.Context) (optimize.ComponentStore, error) {
+	s, err := o.load()
+	if err != nil {
+		return optimize.ComponentStore{}, err
+	}
+	if s.ComponentStoreReport == "" {
+		return optimize.ComponentStore{}, optimize.ErrNoDISM
+	}
+	return optimize.ParseComponentStoreReport([]byte(s.ComponentStoreReport))
+}
+
+// CleanupComponentStore records a simulated DISM cleanup.
+func (o Optimizer) CleanupComponentStore(ctx context.Context) (bool, error) {
+	s, err := o.load()
+	if err != nil {
+		return false, err
+	}
+	if s.ComponentStoreReport == "" {
+		return false, optimize.ErrNoDISM
+	}
+	s.ComponentCleanups++
+	if s.ComponentStoreAfter != "" {
+		s.ComponentStoreReport = s.ComponentStoreAfter
+	}
+	return false, saveState(o.file(), s)
+}
+
+// dismReport is what DISM /AnalyzeComponentStore /English prints (CRLF line
+// ends, the progress bar redrawn with CR).
+func dismReport(explorer, actual, shared, backups, cache string, packages int, recommended string) string {
+	lines := []string{
+		"", "Deployment Image Servicing and Management tool", "Version: 10.0.26100.1", "",
+		"Image Version: 10.0.26100.2033", "",
+		"[==========================100.0%==========================] ", "",
+		"Component Store (WinSxS) information:", "",
+		"Windows Explorer Reported Size of Component Store : " + explorer, "",
+		"Actual Size of Component Store : " + actual, "",
+		"    Shared with Windows : " + shared,
+		"    Backups and Disabled Features : " + backups,
+		"    Cache and Temporary Data : " + cache, "",
+		"Date of Last Cleanup : 2026-08-02 10:14:37", "",
+		fmt.Sprintf("Number of Reclaimable Packages : %d", packages),
+		"Component Store Cleanup Recommended : " + recommended, "",
+		"The operation completed successfully.", "",
+	}
+	return strings.Replace(strings.Join(lines, "\r\n"), "[====", "[==   4.0%    ]\r[====", 1)
 }
 
 // seedSystem writes the simulated startup entries, PATH values, system facts
@@ -521,5 +577,8 @@ func seedSystem(root string, l safety.Locations) error {
 		Retrimmed:   []string{},
 		SSDs:        []optimize.Volume{{Root: `C:\`, FileSystem: "NTFS"}},
 		DOAvailable: true,
+		// DISM recommends a cleanup; afterwards the store is 1.25 GB smaller.
+		ComponentStoreReport: dismReport("7.12 GB", "6.50 GB", "4.10 GB", "2.38 GB", "12.40 MB", 4, "Yes"),
+		ComponentStoreAfter:  dismReport("5.71 GB", "5.25 GB", "4.10 GB", "1.14 GB", "0 bytes", 0, "No"),
 	})
 }
