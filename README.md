@@ -50,12 +50,11 @@ so and exit with code 3.
 
 ## Install
 
-> **Not published yet.** No release has been published and the project name is not final,
-> so there are no winget, Scoop or Chocolatey packages yet (unpublished templates live in
-> [packaging/](packaging/)). The installer below works once the first release is out and the
-> repository is public; until then, build from source.
+Download the [latest release](https://github.com/Harshul1484/out-of-windows/releases/latest),
+or use one of these (no administrator rights needed). winget and Chocolatey packages will follow
+([#13](https://github.com/Harshul1484/out-of-windows/issues/13)).
 
-**PowerShell** (no administrator rights needed):
+**PowerShell**:
 
 ```powershell
 irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/install.ps1 | iex
@@ -64,6 +63,13 @@ irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/in
 For a specific version:
 `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/install.ps1))) -Version 1.2.3`.
 From **Command Prompt**, run [`scripts/install.cmd`](scripts/install.cmd).
+
+**Scoop** ([bucket](https://github.com/Harshul1484/scoop-bucket)):
+
+```powershell
+scoop bucket add oow https://github.com/Harshul1484/scoop-bucket
+scoop install oow/oow
+```
 
 The installer picks the build for your CPU (x64 or ARM64), checks its SHA-256 against the
 release's `SHA256SUMS` before writing anything and stops on any mismatch, installs to

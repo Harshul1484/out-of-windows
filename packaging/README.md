@@ -1,9 +1,12 @@
 # Package manager templates
 
-> **Not published.** These are templates for winget, Scoop and Chocolatey. Nothing is
-> submitted to any package repository before the first release
-> ([#12](https://github.com/Harshul1484/out-of-windows/issues/12)). Until then, install with
-> [`scripts/install.ps1`](../scripts/install.ps1) (see the [README](../README.md#install)).
+> **Status ([#13](https://github.com/Harshul1484/out-of-windows/issues/13)):** Scoop is
+> published in [Harshul1484/scoop-bucket](https://github.com/Harshul1484/scoop-bucket) since
+> v0.1.0 and follows new releases on its own. winget and Chocolatey wait until release binaries
+> are no longer flagged by Microsoft Defender
+> ([#18](https://github.com/Harshul1484/out-of-windows/issues/18)) or are signed
+> ([#15](https://github.com/Harshul1484/out-of-windows/issues/15)), because both scan
+> submissions.
 
 ## Package identities
 
@@ -106,7 +109,9 @@ administrator), then `winget install --manifest <folder>`. The bots validate, in
 the package; answer their labels on the pull request. Users then run
 `winget install Harshul1484.oow`.
 
-**3. Scoop** (a bucket of our own; the official Extras bucket only takes well-known apps, so
+**3. Scoop** (done for v0.1.0: [Harshul1484/scoop-bucket](https://github.com/Harshul1484/scoop-bucket),
+default branch `master`; later versions arrive through its Excavator workflow, so this step is
+only needed to recreate the bucket. The official Extras bucket only takes well-known apps, so
 propose `bucket/oow.json` there later, once it qualifies):
 
 ```powershell
@@ -115,9 +120,9 @@ cd scoop-bucket
 Copy-Item ..\packages\scoop\oow.json bucket\oow.json
 git add bucket/oow.json
 git commit -m "oow: Add version $v"
-git push
-scoop bucket add harshul1484 https://github.com/Harshul1484/scoop-bucket   # test
-scoop install harshul1484/oow
+git push origin master
+scoop bucket add oow https://github.com/Harshul1484/scoop-bucket   # test
+scoop install oow/oow
 oow version
 ```
 
