@@ -3,7 +3,7 @@
 // screenshots. Headless Chrome then renders the page to PNG
 // (.github/workflows/screenshots.yml).
 //
-// Block elements (▀ ▄ █) are drawn as CSS cells rather than font glyphs, so
+// Block and shade elements (▀ ▄ █ ░ ▒ ▓) are drawn as CSS cells rather than font glyphs, so
 // half-block art (the logo, bars) has no gaps between lines whatever the
 // font. Text is otherwise reproduced exactly; -replace only rewrites literal
 // substrings (used to show the sandbox's simulated drive as C:\).
@@ -31,7 +31,7 @@ func (r *replaces) Set(v string) error { *r = append(*r, v); return nil }
 
 const (
 	fontSize   = 15  // px
-	charWidth  = 8.3 // px, measured for Consolas/Cascadia Mono at 15 px
+	charWidth  = 9.0 // px: Cascadia Mono advances 0.6 em (Consolas, the fallback, is narrower)
 	lineHeight = 20  // px
 	padX, padY = 24, 18
 	titleBar   = 36
@@ -144,6 +144,9 @@ func render(b *strings.Builder, line string) int {
 			b.WriteString(`<i class="c" style="background:linear-gradient(` + fg + ` 50%,transparent 50%)"></i>`)
 		case '▄':
 			b.WriteString(`<i class="c" style="background:linear-gradient(transparent 50%,` + fg + ` 50%)"></i>`)
+		case '░', '▒', '▓': // shades: the cell in the text colour at 25/50/75 %
+			op := map[rune]string{'░': ".25", '▒': ".5", '▓': ".75"}[r]
+			b.WriteString(`<i class="c" style="background:` + fg + `;opacity:` + op + `"></i>`)
 		default:
 			b.WriteString(html.EscapeString(string(r)))
 		}
