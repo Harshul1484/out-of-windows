@@ -44,7 +44,7 @@ say so and exit with code 3.
 | `oow uninstall` / `leftovers` | Native uninstall, verification, leftovers to the Recycle Bin | ✅ |
 | `oow analyze` | Interactive disk explorer, large files, Recycle Bin deletion | ✅ |
 | `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard, process list | ✅ |
-| `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
+| `oow optimize` / `doctor` / `startup` / `repair` | Bounded maintenance, diagnostics, startup apps, PATH and startup repair | ✅ |
 | `oow purge` / `installer` | Developer artifacts, unused installers | Phase 7 |
 | `oow update` / `remove` | Self-update and self-removal | Phase 8 |
 
@@ -84,6 +84,11 @@ oow analyze D:\Projects --json --depth 2   # machine-readable breakdown
 oow status               # live dashboard (c: per-core view, p: process sort, q: quit)
 oow status --json --watch --interval 5s    # NDJSON stream for scripts
 oow processes --sort memory --top 10
+oow doctor               # diagnose free space, restarts, updates, PATH, startup, network (changes nothing)
+oow startup              # choose which programs start at sign-in (reversible, like Task Manager)
+oow startup disable "Contoso Agent" --dry-run
+oow optimize --dry-run   # DNS flush, Delivery Optimization cache, SSD retrim: what, why, effect
+oow repair --dry-run     # fix user PATH and broken startup entries (PATH backed up first)
 oow history              # what was removed and when
 ```
 
