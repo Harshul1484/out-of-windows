@@ -192,18 +192,17 @@ func checkFolder(env *Env, n string) (string, string) {
 	if l.SystemDrive != "" && safety.Key(n) == safety.Key(safety.MustNormalize(l.SystemDrive)) {
 		return "refused", "the system drive is too broad; name a folder"
 	}
-	switch env.Guard.Classify(n) {
-	case safety.ClassSystem:
+	if env.Guard.InSystemTree(n) {
 		return "refused", "is a system folder (installer caches there are needed for repair and uninstall)"
+	}
+	if env.Guard.InAppData(n) {
+		return "refused", "is application data (installer caches there are needed for repair and uninstall)"
+	}
+	switch env.Guard.Classify(n) {
 	case safety.ClassProtected:
 		return "refused", "is protected (whitelisted or used by oow)"
 	case safety.ClassSensitive:
 		return "refused", "holds sensitive data"
-	}
-	for _, d := range []string{l.RoamingAppData, l.LocalAppData, l.LocalLow} {
-		if dn, err := safety.Normalize(d); err == nil && d != "" && safety.IsWithin(n, dn) {
-			return "refused", "is application data (installer caches there are needed for repair and uninstall)"
-		}
 	}
 	return "ok", ""
 }
@@ -254,6 +253,9 @@ func Find(ctx context.Context, env *Env, folders []Folder, prog *Progress) *Resu
 			if e.IsDir() {
 				name := strings.ToLower(e.Name)
 				if depth+1 > depthLimit || strings.HasPrefix(name, ".") || skipDirs[name] {
+					continue
+				}
+				if env.Guard.InSystemTree(e.Path) || env.Guard.InAppData(e.Path) {
 					continue
 				}
 				switch env.Guard.Classify(e.Path) {

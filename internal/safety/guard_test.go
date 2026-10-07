@@ -468,6 +468,42 @@ func TestSelfRemovePurpose(t *testing.T) {
 	}
 }
 
+// The top system folders classify as critical, so scan-root checks must ask
+// InSystemTree; it answers for the folders themselves and anything inside.
+func TestInSystemTreeAndInAppData(t *testing.T) {
+	g := NewGuard(testLocations(), nil)
+	for p, want := range map[string]bool{
+		`C:\Windows`:                    true,
+		`C:\Windows\System32\drivers`:   true,
+		`C:\Program Files`:              true,
+		`C:\Program Files (x86)\Vendor`: true,
+		`C:\ProgramData`:                true,
+		`C:\Users\alice`:                false,
+		`C:\Users\alice\Downloads`:      false,
+		`D:\dev`:                        false,
+		`not a path`:                    false,
+	} {
+		if got := g.InSystemTree(p); got != want {
+			t.Errorf("InSystemTree(%s) = %v, want %v", p, got, want)
+		}
+	}
+	for p, want := range map[string]bool{
+		`C:\Users\alice\AppData`:                   true,
+		`C:\Users\alice\AppData\Local\Temp`:        true,
+		`C:\Users\alice\AppData\Roaming\Microsoft`: true,
+		`C:\Users\alice\AppData\LocalLow`:          true,
+		`C:\Users\alice`:                           false,
+		`C:\Users\alice\Documents`:                 false,
+	} {
+		if got := g.InAppData(p); got != want {
+			t.Errorf("InAppData(%s) = %v, want %v", p, got, want)
+		}
+	}
+	if g.Classify(`C:\Windows`) != ClassCritical {
+		t.Error("the Windows folder itself should still classify as critical")
+	}
+}
+
 func TestPurgePurpose(t *testing.T) {
 	g := NewGuard(testLocations(), []string{`D:\dev\keep\node_modules\patched`})
 	gh := `C:\Users\alice\Documents\GitHub\web`

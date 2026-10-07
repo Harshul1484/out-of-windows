@@ -196,9 +196,13 @@ func gitRepo(dir string, add ...string) error {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, "GIT_CONFIG_GLOBAL=NUL", "GIT_CONFIG_NOSYSTEM=1")
+	// The user's global config and hooks are kept out through paths that never
+	// exist: Git treats a missing config file as empty and finds no hooks
+	// there. (NUL does not work: Git for Windows fails to access() it.)
+	absent := filepath.Join(dir, ".git", "oow-absent")
+	env = append(env, "GIT_CONFIG_GLOBAL="+absent, "GIT_CONFIG_NOSYSTEM=1")
 	run := func(args ...string) error {
-		full := append([]string{"-C", dir, "-c", "core.hooksPath=NUL", "-c", "commit.gpgsign=false",
+		full := append([]string{"-C", dir, "-c", "core.hooksPath=" + absent, "-c", "commit.gpgsign=false",
 			"-c", "user.name=oow sandbox", "-c", "user.email=sandbox@example.invalid", "-c", "core.autocrlf=false",
 			"-c", "init.defaultBranch=main"}, args...)
 		cmd := exec.Command(git, full...)

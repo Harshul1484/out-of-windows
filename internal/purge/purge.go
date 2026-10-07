@@ -293,18 +293,17 @@ func refuseRoot(env *Env, n string) string {
 	if sys := systemDrive(l); sys != "" && safety.Key(n) == safety.Key(sys) {
 		return "the system drive is too broad; name a projects folder"
 	}
-	switch env.Guard.Classify(n) {
-	case safety.ClassSystem:
+	if env.Guard.InSystemTree(n) {
 		return "is a system folder"
+	}
+	if env.Guard.InAppData(n) {
+		return "is application data, not a projects folder"
+	}
+	switch env.Guard.Classify(n) {
 	case safety.ClassProtected:
 		return "is protected (whitelisted or used by oow)"
 	case safety.ClassSensitive:
 		return "holds sensitive data"
-	}
-	for _, d := range []string{l.UserProfile + `\AppData`, l.RoamingAppData, l.LocalAppData, l.LocalLow} {
-		if dn, err := safety.Normalize(d); err == nil && d != `\AppData` && d != "" && safety.IsWithin(n, dn) {
-			return "is application data, not a projects folder"
-		}
 	}
 	for _, broad := range []string{l.UsersRoot, l.PublicProfile} {
 		b, err := safety.Normalize(broad)
@@ -454,6 +453,9 @@ func (s *scanner) visit(dir string, depth int, py *Project) {
 		}
 		name := strings.ToLower(d.Name)
 		if strings.HasPrefix(name, ".") || skipNames[name] || depth+1 > s.env.maxDepth() {
+			continue
+		}
+		if s.env.Guard.InSystemTree(d.Path) || s.env.Guard.InAppData(d.Path) {
 			continue
 		}
 		switch s.env.Guard.Classify(d.Path) {

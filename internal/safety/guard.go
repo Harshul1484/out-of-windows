@@ -815,6 +815,25 @@ func (g *Guard) isExempt(scope string) bool {
 	return false
 }
 
+// InSystemTree reports whether p is, or lies inside, a Windows-owned system
+// location (Windows, Program Files, ProgramData, ...). Classify answers
+// ClassCritical for the top folders themselves, so callers that refuse
+// system trees ask this instead.
+func (g *Guard) InSystemTree(p string) bool { return g.within(g.system, p) }
+
+// InAppData reports whether p is, or lies inside, an AppData folder
+// (application state, never projects or downloads).
+func (g *Guard) InAppData(p string) bool { return g.within(g.appData, p) }
+
+func (g *Guard) within(list []location, p string) bool {
+	n, err := Normalize(p)
+	if err != nil {
+		return false
+	}
+	_, ok := g.containing(list, n)
+	return ok
+}
+
 func (g *Guard) containing(list []location, p string) (location, bool) {
 	for _, l := range list {
 		if IsWithin(p, l.path) {
