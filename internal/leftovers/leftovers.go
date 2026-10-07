@@ -27,11 +27,14 @@ type Evidence struct {
 	InstallLocation string   `json:"install_location,omitempty"`
 	Exes            []string `json:"exes,omitempty"`
 	// Source is "uninstalled" (just now), "history" (uninstalled earlier
-	// by oow), "broken-entry" (registry entry whose app is gone) or
-	// "usage-trace" (Windows recorded running an executable that is gone).
+	// by oow), "broken-entry" (registry entry whose app is gone),
+	// "usage-trace" (Windows recorded running an executable that is gone) or
+	// "shortcut" (a shortcut to a program that is gone).
 	Source string `json:"source"`
 	// When is when the app was uninstalled, if known.
 	When time.Time `json:"when,omitempty"`
+	// Shortcuts are the broken shortcuts behind "shortcut" evidence.
+	Shortcuts []string `json:"shortcuts,omitempty"`
 }
 
 // Describe explains in words why this app is believed to be gone.
@@ -48,6 +51,8 @@ func (e Evidence) Describe() string {
 		return "still listed as installed, but its uninstaller and program are gone"
 	case SourceTrace:
 		return "Windows remembers running it, but its program is gone"
+	case SourceShortcut:
+		return "a shortcut to it remains, but its program is gone"
 	}
 	return e.Source
 }
@@ -58,7 +63,13 @@ const (
 	SourceHistory     = "history"
 	SourceBroken      = "broken-entry"
 	SourceTrace       = "usage-trace"
+	SourceShortcut    = "shortcut"
 )
+
+// weakSource reports whether evidence from source alone is never enough
+// for high confidence: usage traces and broken shortcuts say a program is
+// gone, not that the app was uninstalled.
+func weakSource(source string) bool { return source == SourceTrace || source == SourceShortcut }
 
 // FromApp turns an app record into evidence.
 func FromApp(a apps.App, source string) Evidence {
@@ -69,8 +80,13 @@ func FromApp(a apps.App, source string) Evidence {
 	return ev
 }
 
-// keys are the distinctive normalized names identifying the app.
+// keys are the distinctive normalized names identifying the app. Shortcut
+// evidence has none: it names an exact folder, and its file name is shown,
+// never matched.
 func (e Evidence) keys() []string {
+	if e.Source == SourceShortcut {
+		return nil
+	}
 	var out []string
 	add := func(s string) {
 		n := apps.NormalizeName(s)
@@ -95,6 +111,9 @@ func (e Evidence) keys() []string {
 }
 
 func (e Evidence) publisherKey() string {
+	if e.Source == SourceShortcut {
+		return ""
+	}
 	p := apps.NormalizePublisher(e.Publisher)
 	if apps.IsDistinctive(p) {
 		return p

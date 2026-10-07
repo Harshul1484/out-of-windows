@@ -57,12 +57,20 @@ func Locations(root string) safety.Locations {
 		},
 		CriticalExtra: []string{
 			filepath.Join(roaming, "Microsoft", "Windows", "Start Menu"),
+			StartMenuPrograms(root),
+			filepath.Join(StartMenuPrograms(root), "Startup"),
 			filepath.Join(local, "Microsoft"),
 			filepath.Join(local, "Packages"),
 			filepath.Join(local, "Programs"),
 			filepath.Join(roaming, "Microsoft"),
 		},
+		ShortcutRoots: []string{StartMenuPrograms(root), filepath.Join(prof, "Desktop")},
 	}
+}
+
+// StartMenuPrograms is the simulated user's Start Menu Programs folder.
+func StartMenuPrograms(root string) string {
+	return filepath.Join(root, "C", "Users", UserName, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs")
 }
 
 // DataDir is where sandbox mode keeps configuration, history and logs.

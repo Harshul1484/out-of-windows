@@ -38,6 +38,12 @@ type Locations struct {
 	// (Start Menu, Startup, ...).
 	CriticalExtra []string
 
+	// The current user's own shortcut folders (Start Menu Programs and
+	// Desktop). A broken shortcut there may go to the Recycle Bin together
+	// with the leftover folder its program lived in (PurposeShortcut). The
+	// all-users Start Menu and the public Desktop are never listed here.
+	ShortcutRoots []string
+
 	// Fixed drive roots present on the machine, e.g. C:\ and D:\.
 	FixedDrives []string
 

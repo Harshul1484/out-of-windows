@@ -305,7 +305,7 @@ func uninstallOne(ctx context.Context, app *App, inv *apps.Inventory, a apps.App
 	ev := leftovers.FromApp(a, leftovers.SourceUninstalled)
 
 	// What may remain: matching folders now, judged as if the app were gone.
-	preview := leftovers.Find(ctx, app.leftoverEnv(inv, func(x apps.App) bool { return x.ID == a.ID || x.IsBroken() }),
+	preview := leftovers.Find(ctx, app.leftoverEnv(ctx, inv, func(x apps.App) bool { return x.ID == a.ID || x.IsBroken() }),
 		[]leftovers.Evidence{ev})
 	if !app.JSON {
 		printPlan(app, plan, preview)
@@ -379,17 +379,17 @@ func uninstallOne(ctx context.Context, app *App, inv *apps.Inventory, a apps.App
 	if err != nil {
 		inv2 = inv
 	}
-	env := app.leftoverEnv(inv2, func(x apps.App) bool { return x.IsBroken() })
+	env := app.leftoverEnv(ctx, inv2, func(x apps.App) bool { return x.IsBroken() })
 	found := leftovers.Find(ctx, env, []leftovers.Evidence{ev})
 	r.Leftovers = found
 	recycled, err := reviewAndRecycle(ctx, app, env, found, o.yes, o.dryRun, true)
 	r.Recycled = recycled
 	target.Removed = 1
 	if recycled != nil {
-		rec.Removed = 1 + len(recycled.Recycled)
+		rec.Removed = 1 + len(recycled.Recycled) + len(recycled.RecycledShortcuts)
 		rec.Recycled = recycled.Bytes
 		rec.Skipped, rec.Errors = len(recycled.Skipped), recycled.Errors
-		target.Removed += len(recycled.Recycled)
+		target.Removed += len(recycled.Recycled) + len(recycled.RecycledShortcuts)
 		target.Skipped, target.Errors = len(recycled.Skipped), recycled.Errors
 	} else {
 		rec.Removed = 1
@@ -425,13 +425,17 @@ func printPlan(app *App, p uninstall.Plan, preview *leftovers.Result) {
 }
 
 // leftoverEnv builds the leftover environment with claims from inv (minus
-// skipped apps) and from running programs, services and startup entries.
-func (a *App) leftoverEnv(inv *apps.Inventory, skip func(apps.App) bool) *leftovers.Env {
+// skipped apps) and from running programs, services, startup entries and
+// scheduled tasks, and the broken shortcuts that may go with a leftover.
+func (a *App) leftoverEnv(ctx context.Context, inv *apps.Inventory, skip func(apps.App) bool) *leftovers.Env {
+	shortcuts, links := a.brokenShortcuts(ctx)
 	return &leftovers.Env{
 		Guard:          a.Guard,
 		Claims:         leftovers.NewClaims(inv, skip, a.systemClaims(), a.Guard),
 		Elevated:       a.Elevated,
 		RecentActivity: 7 * 24 * time.Hour,
+		Shortcuts:      shortcuts,
+		Links:          links,
 	}
 }
 
@@ -469,7 +473,7 @@ func reviewAndRecycle(ctx context.Context, app *App, env *leftovers.Env, found *
 				Right:   ui.PadLeft(ui.Bytes(c.Bytes), 9) + "  " + confidenceLabel(c.Confidence),
 				Checked: c.Confidence == leftovers.High,
 				Weight:  c.Bytes,
-				Detail:  append([]string{"Why    " + strings.Join(c.Reasons, "; ")}, adminNote(c)...),
+				Detail:  append(append([]string{"Why    " + strings.Join(c.Reasons, "; ")}, adminNote(c)...), shortcutLines(c, "Link   ")...),
 			}
 			if c.NeedsAdmin && !env.Elevated {
 				it.Disabled, it.Note, it.Checked = true, "needs administrator rights", false
@@ -502,17 +506,22 @@ func reviewAndRecycle(ctx context.Context, app *App, env *leftovers.Env, found *
 	}
 	var runnable []leftovers.Candidate
 	var bytes int64
+	links := 0
 	for _, c := range chosen {
 		if !c.NeedsAdmin || env.Elevated {
 			runnable = append(runnable, c)
 			bytes += c.Bytes
+			links += removableShortcuts(c)
 		}
 	}
 	var out *leftovers.Outcome
 	if len(runnable) > 0 {
 		if app.interactive() && !yes {
-			ok, err := confirmCtx(ctx, app, fmt.Sprintf(" Move %s (%s) to the Recycle Bin? You can restore them from there.",
-				ui.Plural(len(runnable), "folder", "folders"), ui.Bytes(bytes)))
+			what := fmt.Sprintf("%s (%s)", ui.Plural(len(runnable), "folder", "folders"), ui.Bytes(bytes))
+			if links > 0 {
+				what += " and " + ui.Plural(links, "broken shortcut", "broken shortcuts")
+			}
+			ok, err := confirmCtx(ctx, app, fmt.Sprintf(" Move %s to the Recycle Bin? You can restore them from there.", what))
 			if err != nil {
 				return nil, err
 			}
@@ -530,6 +539,34 @@ func reviewAndRecycle(ctx context.Context, app *App, env *leftovers.Env, found *
 		offerElevatedLeftovers(ctx, app, admin)
 	}
 	return out, nil
+}
+
+func removableShortcuts(c leftovers.Candidate) int {
+	n := 0
+	for _, sc := range c.Shortcuts {
+		if sc.Removable {
+			n++
+		}
+	}
+	return n
+}
+
+// shortcutLines describes the broken shortcuts of a candidate: the ones
+// that move with it, and why the others stay.
+func shortcutLines(c leftovers.Candidate, prefix string) []string {
+	var out []string
+	for _, sc := range c.Shortcuts {
+		what := "moves with the folder"
+		if !sc.Removable {
+			what = sc.Note
+		}
+		where := "in"
+		if strings.Contains(sc.Location, "Desktop") {
+			where = "on"
+		}
+		out = append(out, fmt.Sprintf("%sshortcut %s %s %s (%s)", prefix, filepath.Base(sc.Path), where, sc.Location, what))
+	}
+	return out
 }
 
 func adminNote(c leftovers.Candidate) []string {
@@ -569,6 +606,9 @@ func printLeftovers(app *App, found *leftovers.Result, evidence map[string]lefto
 			app.printf("     %s %s %s%s\n", ui.PadRight(confidenceLabel(c.Confidence), 7), ui.PadLeft(ui.Bytes(c.Bytes), 9),
 				ui.TruncateMiddle(c.Path, width-30), admin)
 			app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(strings.Join(c.Reasons, "; "), width-10, "       ")))
+			for _, l := range shortcutLines(c, "+ ") {
+				app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(l, width-10, "         ")))
+			}
 		}
 		app.printf("\n %s %s %s\n", ui.PadRight("Total", 12), ui.Title.Render(ui.Bytes(found.Bytes())),
 			ui.Muted.Render("in "+ui.Plural(len(found.Candidates), "folder", "folders")))
@@ -583,6 +623,9 @@ func printLeftovers(app *App, found *leftovers.Result, evidence map[string]lefto
 func printRecycled(app *App, out *leftovers.Outcome) {
 	for _, c := range out.Recycled {
 		app.printf("   %s %s %s\n", ui.OK.Render(ui.SymOK), ui.PadLeft(ui.Bytes(c.Bytes), 9), filepath.Clean(c.Path))
+	}
+	for _, p := range out.RecycledShortcuts {
+		app.printf("   %s %s %s\n", ui.OK.Render(ui.SymOK), ui.PadLeft("shortcut", 9), p)
 	}
 	for _, s := range out.Skipped {
 		app.printf("   %s %s %s\n", ui.Muted.Render(ui.SymSkip), s.Path, ui.Muted.Render(s.Reason))

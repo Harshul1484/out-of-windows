@@ -656,3 +656,112 @@ func FuzzPurgeScope(f *testing.F) {
 		}
 	})
 }
+
+const startMenuPrograms = `C:\Users\alice\AppData\Roaming\Microsoft\Windows\Start Menu\Programs`
+
+// shortcutLocations adds the user's Start Menu Programs and Startup folders
+// (critical, as discovery reports them) and the shortcut roots.
+func shortcutLocations() Locations {
+	l := testLocations()
+	l.CriticalExtra = append(l.CriticalExtra, startMenuPrograms, startMenuPrograms+`\Startup`)
+	l.ShortcutRoots = []string{startMenuPrograms, `C:\Users\alice\Desktop`}
+	return l
+}
+
+// Broken shortcuts may be recycled only as .lnk files inside the user's own
+// Start Menu Programs folder or Desktop, never in the Startup folder, the
+// all-users Start Menu, the whitelist or any other folder.
+func TestShortcutPurpose(t *testing.T) {
+	sm, desk := startMenuPrograms, `C:\Users\alice\Desktop`
+	g := NewGuard(shortcutLocations(), []string{sm + `\Keep`})
+	if got := g.ShortcutRoots(); len(got) != 2 || got[0] != sm || got[1] != desk {
+		t.Fatalf("shortcut roots = %q", got)
+	}
+	for _, c := range []struct {
+		path, scope string
+		class       Class
+	}{
+		{sm + `\Contoso Studio.lnk`, sm, ClassOrdinary},
+		{sm + `\Contoso\Contoso Studio.lnk`, sm, ClassOrdinary},
+		{sm + `\a\b\Deep.LNK`, sm, ClassOrdinary},
+		{`\\?\` + sm + `\Contoso.lnk`, sm, ClassOrdinary},
+		{desk + `\Contoso Studio.lnk`, desk, ClassUserContent},
+	} {
+		if d := g.Check(Request{Path: c.path, Purpose: PurposeShortcut, Scope: c.scope}); !d.Allowed || d.Class != c.class {
+			t.Errorf("shortcut %s (scope %s): %+v", c.path, c.scope, d)
+		}
+	}
+	for _, c := range [][2]string{
+		{sm + `\Startup\Contoso.lnk`, sm},        // startup entries are disabled, never removed
+		{sm + `\Startup`, sm},                    // the Startup folder itself
+		{sm, sm},                                 // the root itself
+		{sm + `\Contoso\studio.exe`, sm},         // not a shortcut
+		{sm + `\Contoso.url`, sm},                // not a .lnk file
+		{desk + `\notes.txt`, desk},              // a user file
+		{desk + `\Projects`, desk},               // a folder
+		{sm + `\a\b\c\Deep.lnk`, sm},             // too deep
+		{sm + `\Keep\Contoso.lnk`, sm},           // whitelisted
+		{sm + `\Contoso.lnk`, desk},              // outside the scope
+		{sm + `\Contoso.lnk`, ""},                // no scope
+		{sm + `\Contoso\a.lnk`, sm + `\Contoso`}, // not a shortcut root
+		{`C:\Users\alice\Documents\x.lnk`, `C:\Users\alice\Documents`},
+		{`C:\ProgramData\Microsoft\Windows\Start Menu\Programs\x.lnk`, `C:\ProgramData\Microsoft\Windows\Start Menu\Programs`},
+		{sm + `\..\..\..\..\..\..\..\Windows\x.lnk`, sm}, // traversal
+		{`C:\Users\alice\.ssh\x.lnk`, sm},                // sensitive
+		{`\\server\share\x.lnk`, `\\server\share`},
+	} {
+		if d := g.Check(Request{Path: c[0], Purpose: PurposeShortcut, Scope: c[1]}); d.Allowed {
+			t.Errorf("shortcut %s (scope %q) allowed", c[0], c[1])
+		}
+	}
+	// A folder holding the profile, AppData or another user folder, or one
+	// outside the profile, is never a shortcut root.
+	for _, root := range []string{`C:\Users\alice`, `C:\Users`, `D:\Desktop`, `C:\Users\alice\AppData`,
+		`C:\Program Files\Shortcuts`, `C:\`, `\\server\Desktop`} {
+		l := testLocations()
+		l.ShortcutRoots = []string{root}
+		g := NewGuard(l, nil)
+		if len(g.ShortcutRoots()) != 0 {
+			t.Errorf("%s accepted as a shortcut root", root)
+		}
+		if d := g.Check(Request{Path: strings.TrimRight(root, `\`) + `\x.lnk`, Purpose: PurposeShortcut, Scope: root}); d.Allowed {
+			t.Errorf("%s\\x.lnk allowed", root)
+		}
+	}
+}
+
+// FuzzShortcutScope checks the shortcut invariant: anything allowed is a .lnk
+// file strictly inside one of the user's shortcut roots, outside the Startup
+// folder, AppData data folders and system trees.
+func FuzzShortcutScope(f *testing.F) {
+	g := NewGuard(shortcutLocations(), nil)
+	desk := `C:\Users\alice\Desktop`
+	for _, s := range []string{startMenuPrograms + `\x.lnk`, startMenuPrograms + `\Startup\x.lnk`,
+		desk + `\a.lnk`, startMenuPrograms + `\..\x.lnk`, `\\?\C:\Users\alice\Desktop\.\b.lnk.`} {
+		f.Add(s, startMenuPrograms)
+		f.Add(s, desk)
+	}
+	f.Fuzz(func(t *testing.T, p, scope string) {
+		d := g.Check(Request{Path: p, Purpose: PurposeShortcut, Scope: scope})
+		if !d.Allowed {
+			return
+		}
+		n, err := Normalize(p)
+		if err != nil {
+			t.Fatalf("allowed unparseable path %q", p)
+		}
+		s, _ := Normalize(scope)
+		if Key(s) != Key(startMenuPrograms) && Key(s) != Key(desk) {
+			t.Fatalf("allowed scope %q", scope)
+		}
+		if !IsStrictlyWithin(n, s) || !strings.HasSuffix(strings.ToLower(n), ".lnk") {
+			t.Fatalf("allowed %q (scope %q)", n, scope)
+		}
+		for _, forbidden := range []string{startMenuPrograms + `\Startup`, `C:\Users\alice\AppData\Local`,
+			`C:\Windows`, `C:\Program Files`, `C:\Users\alice\Documents`} {
+			if IsWithin(n, forbidden) {
+				t.Fatalf("allowed %q inside %s", n, forbidden)
+			}
+		}
+	})
+}

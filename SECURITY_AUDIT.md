@@ -173,6 +173,21 @@ key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlit
   directories and absolute argument paths, enabled or not. Folders or tasks the user cannot read
   are counted, not guessed.
 - Folders containing sensitive file types are never offered.
+- **Broken shortcuts** are read-only evidence: `.lnk` files in the user's Start Menu Programs
+  folder, on the Desktop, in the all-users Start Menu and on the public Desktop (Known Folder APIs;
+  Startup folders skipped; links and cloud placeholders not opened; at most 5000 shortcuts, 1 MiB
+  each, 4 levels) are parsed with `startup.ParseLink`. Only an `.exe` target with an absolute path
+  that `system.ProbePath` reports missing on a fixed drive counts. The evidence is the exact folder
+  that held the program (or its parent for `bin`/`x64`-style folders), only when it still exists,
+  passes `PurposeLeftover` and has a distinctive name (or a distinctive publisher-folder parent);
+  shortcut names are never matched against folders. Alone it is medium confidence.
+- **Shortcut removal** happens only together with a leftover folder that was just moved: each
+  broken shortcut of the user's own Start Menu Programs folder or Desktop is re-read (same missing
+  target), verified through a handle and recycled with `RecycleVerified` under
+  **`PurposeShortcut`**: scope must be one of `Locations.ShortcutRoots` that the guard accepted
+  (strictly inside the profile, holding no AppData or user folder), the path a `.lnk` file at most
+  three levels inside, never inside a never-remove folder within it (Startup), never whitelisted,
+  protected or sensitive. Shortcuts for all users are never removed.
 - Leftovers are moved with `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO`, plus
   `FOF_WANTNUKEWARNING` so the Shell warns instead of silently deleting), only on fixed drives,
   after `filesystem.Verify` re-checks identity, links, the fence and the guard through a handle.
@@ -270,9 +285,9 @@ These commands delete no user files. What each one may change, and how:
   offered). A program is called missing only after a verified "not found" on a fixed drive: bare
   names resolved through PATH, UNC paths, removable or disconnected drives and unreadable
   shortcuts are "unknown", so nothing is offered for repair on a guess.
-- **Shortcut parsing** (`startup.ParseLink`, MS-SHLLINK) reads at most 1 MiB, bounds-checks every
-  offset and count, and returns an error instead of panicking (fuzzed: `FuzzParseLink`). ANSI
-  strings are decoded with the system code page, never guessed.
+- **Shortcut parsing** (`startup.ParseLink`, MS-SHLLINK; also used for leftover evidence) reads at
+  most 1 MiB, bounds-checks every offset and count, and returns an error instead of panicking
+  (fuzzed: `FuzzParseLink`). ANSI strings are decoded with the system code page, never guessed.
 - **`optimize` runs only owner interfaces**, each only after confirmation (`--yes` for scripts):
   `DnsFlushResolverCache` (dnsapi), `Delete-DeliveryOptimizationCache -Force` (pinned files kept;
   this is the reviewed owner-tool path for the Delivery Optimization cache, which `oow` never
@@ -448,6 +463,8 @@ protected together with their ancestors (deleting a parent would delete them).
 | Uninstall plans, waiting, verification, cancel, restart, failure | `internal/uninstall/uninstall_test.go` |
 | Leftovers: evidence, confidence, claims, traces, broken entries, sensitive content, admin, junctions, swaps | `internal/leftovers/leftovers_test.go` |
 | Scheduled tasks as claims (program folder, working directory, argument paths; disabled tasks still claim) | `internal/leftovers` `TestScheduledTasksClaimFolders`, `TestTaskClaimPaths`; `internal/cli` `TestLeftoversCommand` |
+| Shortcut guard purpose (own Start Menu and Desktop, `.lnk` only, never Startup or all-users folders, whitelist, root validation) | `internal/safety` `TestShortcutPurpose`, `FuzzShortcutScope` |
+| Broken shortcut evidence (exact folder, never names, generic folders refused, network targets unknown, medium at most, recent activity) and removal with the folder (all-users kept, changed shortcut kept) | `internal/leftovers` `TestShortcutEvidence`, `TestShortcutsGoWithTheirFolder`, `TestUninstalledAppShortcuts`; `internal/cli` `TestLeftoversCommand`, `TestUninstallEndToEnd` |
 | Uninstall/leftovers CLI (dry run, confirmation, JSON, failure, end to end) | `internal/cli/uninstall_test.go` |
 | Name normalization and command-line parsing | `internal/apps/apps_test.go` |
 | Analyzer totals, links, unreadable folders, cancellation, largest files | `internal/analyzer/analyzer_test.go` |

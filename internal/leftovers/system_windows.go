@@ -11,6 +11,9 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/Harshul1484/out-of-windows/internal/apps"
+	"github.com/Harshul1484/out-of-windows/internal/safety"
+	"github.com/Harshul1484/out-of-windows/internal/startup"
+	"github.com/Harshul1484/out-of-windows/internal/system"
 	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
@@ -180,6 +183,50 @@ func startupClaims() []ClaimPath {
 		k.Close()
 	}
 	return out
+}
+
+// SystemShortcutFolders lists where shortcuts are searched on the real system
+// (Known Folder APIs): the user's Start Menu Programs folder and Desktop,
+// whose broken shortcuts may be recycled with their leftover, and the
+// all-users Start Menu and public Desktop, which are read for evidence only.
+// The Startup folders are not searched.
+func SystemShortcutFolders() []ShortcutFolder {
+	kf := func(id *windows.KNOWNFOLDERID) string {
+		p, err := windows.KnownFolderPath(id, windows.KF_FLAG_DEFAULT)
+		if err != nil {
+			return ""
+		}
+		return safety.LongPath(p)
+	}
+	var out []ShortcutFolder
+	add := func(f ShortcutFolder) {
+		if f.Path != "" {
+			out = append(out, f)
+		}
+	}
+	add(ShortcutFolder{Path: kf(windows.FOLDERID_Programs), Location: "your Start Menu", Depth: 4, Removable: true,
+		Skip: []string{kf(windows.FOLDERID_Startup)}})
+	add(ShortcutFolder{Path: kf(windows.FOLDERID_Desktop), Location: "your Desktop", Depth: 1, Removable: true})
+	add(ShortcutFolder{Path: kf(windows.FOLDERID_CommonPrograms), Location: "the Start Menu for all users", Depth: 4,
+		Skip: []string{kf(windows.FOLDERID_CommonStartup)}})
+	add(ShortcutFolder{Path: kf(windows.FOLDERID_PublicDesktop), Location: "the public Desktop", Depth: 1})
+	return out
+}
+
+// SystemLinks reads shortcuts of the real system: strings in the ANSI code
+// page are decoded with it, variables are expanded for the current user, and
+// targets are probed without touching network or removable drives.
+func SystemLinks() LinkResolver {
+	return LinkResolver{
+		Read: func(p string) (*startup.Link, error) { return startup.ReadLink(p, startup.DecodeANSI) },
+		Expand: func(s string) string {
+			if x, err := registry.ExpandString(s); err == nil {
+				return x
+			}
+			return s
+		},
+		Probe: system.ProbePath,
+	}
 }
 
 // commandDir returns the folder of the program in a command line.

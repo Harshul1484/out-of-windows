@@ -165,12 +165,20 @@ what was actually left. With `--yes`, only `high` confidence leftovers are moved
 }
 ```
 
-After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`.
+After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`, with
+`recycled_shortcuts` (the broken shortcuts moved with their folders; `[]` when none).
 
-- `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`.
+- `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`, `shortcut`.
+- `shortcut` evidence carries `shortcuts`: the shortcut files whose program (in `exes`) is gone.
+  Its `install_location` is the exact folder the program lived in (its parent when that folder is
+  `bin`, `x64` and the like); the shortcut's name is shown as `name` but never matched.
 - `confidence`: `high` (registered install folder, or two or more independent signals) or
-  `medium` (a single exact-name signal, and everything based on usage traces).
+  `medium` (a single exact-name signal, and everything based only on usage traces or shortcuts).
 - `needs_admin`: the folder is in Program Files or ProgramData and `oow` is not elevated.
+- A candidate's `shortcuts` (present when there are any) are broken shortcuts whose program lived
+  in it: `{"path", "target", "location", "removable", "note"}`. Only `removable` ones (the user's
+  own Start Menu and Desktop) go to the Recycle Bin, together with the folder; `note` says why
+  the others stay (the Start Menu and Desktop for all users are never changed).
 
 ## `oow analyze --json` — `oow.analyze/v1`
 

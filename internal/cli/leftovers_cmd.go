@@ -26,8 +26,10 @@ func newLeftoversCmd(app *App) *cobra.Command {
 		Short:   "Find folders left behind by apps that are no longer installed",
 		GroupID: "clean",
 		Long: "Look for folders left behind by applications that are gone: apps uninstalled with\n" +
-			buildinfo.Name + ", apps still listed but whose uninstaller and program files are missing, and\n" +
-			"programs Windows remembers running whose files no longer exist.\n\n" +
+			buildinfo.Name + ", apps still listed but whose uninstaller and program files are missing,\n" +
+			"programs Windows remembers running whose files no longer exist, and Start menu or Desktop\n" +
+			"shortcuts whose program is gone (only the exact folder it lived in). Your own broken\n" +
+			"shortcuts go to the Recycle Bin with the folder; shortcuts for all users stay.\n\n" +
 			"A folder is only offered with evidence that the app owned it, never because a name\n" +
 			"merely looks similar. Folders still used by installed apps, running programs, services,\n" +
 			"startup entries or scheduled tasks are kept. Confirmed folders go to the Recycle Bin.",
@@ -47,8 +49,9 @@ func newLeftoversCmd(app *App) *cobra.Command {
 	return cmd
 }
 
-// leftoverEvidence gathers every source of "this app used to be here".
-func (a *App) leftoverEvidence(inv *apps.Inventory) []leftovers.Evidence {
+// leftoverEvidence gathers every source of "this app used to be here":
+// oow's history, broken registry entries, usage traces and broken shortcuts.
+func (a *App) leftoverEvidence(inv *apps.Inventory, shortcuts []leftovers.Shortcut) []leftovers.Evidence {
 	var evs []leftovers.Evidence
 	if recs, err := history.Load(a.Dirs.Data, 0); err == nil {
 		for _, r := range recs {
@@ -64,6 +67,7 @@ func (a *App) leftoverEvidence(inv *apps.Inventory) []leftovers.Evidence {
 		}
 	}
 	evs = append(evs, leftovers.EvidenceFromTraces(a.usageTraces(), a.Guard, apps.FileExists)...)
+	evs = append(evs, leftovers.EvidenceFromShortcuts(shortcuts, a.Guard)...)
 	return evs
 }
 
@@ -88,9 +92,9 @@ func runLeftovers(ctx context.Context, app *App, o leftoversOptions) error {
 	if err != nil {
 		return err
 	}
-	evs := app.leftoverEvidence(inv)
-	env := app.leftoverEnv(inv, func(x apps.App) bool { return x.IsBroken() })
 	spin := ui.StartSpinner(app.Err, app.tty(), func() string { return "Looking for leftovers" })
+	env := app.leftoverEnv(ctx, inv, func(x apps.App) bool { return x.IsBroken() })
+	evs := app.leftoverEvidence(inv, env.Shortcuts)
 	found := leftovers.Find(ctx, env, evs)
 	spin.Stop()
 	if ctx.Err() != nil {
@@ -148,9 +152,12 @@ func (a *App) recordLeftovers(out *leftovers.Outcome) {
 		return
 	}
 	rec := history.Record{Time: time.Now(), Command: "leftovers", Sandbox: a.Sandbox != "",
-		Removed: len(out.Recycled), Recycled: out.Bytes, Skipped: len(out.Skipped), Errors: out.Errors}
+		Removed: len(out.Recycled) + len(out.RecycledShortcuts), Recycled: out.Bytes, Skipped: len(out.Skipped), Errors: out.Errors}
 	for _, c := range out.Recycled {
 		rec.Targets = append(rec.Targets, history.TargetStat{ID: c.Path, Name: c.App, Removed: 1, Reclaimed: c.Bytes})
+	}
+	for _, p := range out.RecycledShortcuts {
+		rec.Targets = append(rec.Targets, history.TargetStat{ID: p, Name: "broken shortcut", Removed: 1})
 	}
 	a.record(rec)
 }

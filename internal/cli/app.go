@@ -240,6 +240,16 @@ func (a *App) usageTraces() []leftovers.Trace {
 	return leftovers.ReadTraces()
 }
 
+// brokenShortcuts reads the Start Menu and Desktop shortcuts whose program
+// is gone (read-only).
+func (a *App) brokenShortcuts(ctx context.Context) ([]leftovers.Shortcut, leftovers.LinkResolver) {
+	folders, links := leftovers.SystemShortcutFolders(), leftovers.SystemLinks()
+	if a.Sandbox != "" {
+		folders, links = sandbox.ShortcutFolders(a.Sandbox), sandbox.Links(a.Sandbox)
+	}
+	return leftovers.FindBrokenShortcuts(ctx, a.Guard, folders, links), links
+}
+
 // systemClaims lists folders the system still uses. The sandbox simulates
 // only scheduled tasks among these sources.
 func (a *App) systemClaims() []leftovers.ClaimPath {

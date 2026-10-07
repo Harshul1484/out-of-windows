@@ -24,20 +24,24 @@ const (
 
 // Candidate is a folder believed to be left behind by an app.
 type Candidate struct {
-	Path        string                 `json:"path"`
-	App         string                 `json:"app"`
-	Source      string                 `json:"source"`
-	Location    string                 `json:"location"` // kind of root, e.g. "app data"
-	Confidence  Confidence             `json:"confidence"`
-	Reasons     []string               `json:"reasons"`
-	Bytes       int64                  `json:"bytes"`
-	Files       int                    `json:"files"`
-	Newest      time.Time              `json:"newest_change"`
-	NeedsAdmin  bool                   `json:"needs_admin"`
+	Path       string     `json:"path"`
+	App        string     `json:"app"`
+	Source     string     `json:"source"`
+	Location   string     `json:"location"` // kind of root, e.g. "app data"
+	Confidence Confidence `json:"confidence"`
+	Reasons    []string   `json:"reasons"`
+	Bytes      int64      `json:"bytes"`
+	Files      int        `json:"files"`
+	Newest     time.Time  `json:"newest_change"`
+	NeedsAdmin bool       `json:"needs_admin"`
+	// Shortcuts are broken shortcuts whose program lived in this folder.
+	// The removable ones go to the Recycle Bin with it.
+	Shortcuts   []Shortcut             `json:"shortcuts,omitempty"`
 	Root        string                 `json:"-"`
 	Fingerprint filesystem.Fingerprint `json:"-"`
 	signals     int
 	exact       bool
+	strong      bool // some evidence is not weak (see weakSource)
 }
 
 // Kept is a folder that matched an app but is not offered, with the reason.
@@ -68,8 +72,14 @@ type Env struct {
 	Claims   *Claims
 	Elevated bool
 	Now      func() time.Time
-	// RecentActivity keeps usage-trace folders changed more recently than this.
+	// RecentActivity keeps folders found only through weak evidence (usage
+	// traces, shortcuts) that changed more recently than this.
 	RecentActivity time.Duration
+	// Shortcuts are the broken shortcuts found on the system; each one is
+	// listed on the candidate its program lived in.
+	Shortcuts []Shortcut
+	// Links re-reads shortcuts before they are moved to the Recycle Bin.
+	Links LinkResolver
 }
 
 func (e *Env) now() time.Time {
@@ -95,6 +105,7 @@ func Find(ctx context.Context, env *Env, evidences []Evidence) *Result {
 		c.Reasons = appendUnique(c.Reasons, reason)
 		c.signals += signals
 		c.exact = c.exact || exact
+		c.strong = c.strong || !weakSource(ev.Source)
 	}
 
 	for _, ev := range evidences {
@@ -112,10 +123,13 @@ func Find(ctx context.Context, env *Env, evidences []Evidence) *Result {
 		if loc, err := safety.Normalize(ev.InstallLocation); err == nil && ev.InstallLocation != "" && isDir(loc) {
 			if root, ok := env.Guard.LeftoverRootFor(loc); ok {
 				reason := "install folder of " + ev.Name + " is still present"
-				if ev.Source == SourceTrace {
+				switch ev.Source {
+				case SourceTrace:
 					reason = ev.Name + " ran from this folder; its program file is gone"
+				case SourceShortcut:
+					reason = "a shortcut still starts " + strings.Join(ev.Exes, ", ") + " from this folder, but the program is gone"
 				}
-				add(ev, loc, root, reason, 2, ev.Source != SourceTrace)
+				add(ev, loc, root, reason, 2, !weakSource(ev.Source))
 			}
 		}
 		if len(keys) == 0 {
@@ -188,6 +202,7 @@ func Find(ctx context.Context, env *Env, evidences []Evidence) *Result {
 		}
 		return a.Path < b.Path
 	})
+	attachShortcuts(res.Candidates, env.Shortcuts)
 	return res
 }
 
@@ -235,11 +250,11 @@ func (env *Env) qualify(ctx context.Context, c *Candidate) (kept bool, reason st
 	if sensitive != "" {
 		return true, "contains " + sensitive + ", which may be a key, credential store or disk image"
 	}
-	if c.Source == SourceTrace && env.RecentActivity > 0 && c.Newest.After(env.now().Add(-env.RecentActivity)) {
+	if !c.strong && env.RecentActivity > 0 && c.Newest.After(env.now().Add(-env.RecentActivity)) {
 		return true, "changed recently, so it may still be in use"
 	}
 	c.Confidence = Medium
-	if c.Source != SourceTrace && (c.exact || c.signals >= 2) {
+	if c.strong && (c.exact || c.signals >= 2) {
 		c.Confidence = High
 	}
 	if root, ok := env.Guard.LeftoverRootFor(c.Path); ok && root.Admin && !env.Elevated {

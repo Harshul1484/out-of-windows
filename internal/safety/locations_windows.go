@@ -90,6 +90,8 @@ func DiscoverLocations() Locations {
 		joinIf(l.RoamingAppData, "Microsoft"),
 	)
 
+	l.ShortcutRoots = nonEmpty(kf(windows.FOLDERID_Programs), kf(windows.FOLDERID_Desktop))
+
 	l.FixedDrives = fixedDrives()
 	return l
 }
