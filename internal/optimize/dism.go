@@ -22,6 +22,15 @@ var (
 	dismCleanupArgs = []string{"/Online", "/English", "/Quiet", "/NoRestart", "/Cleanup-Image", "/StartComponentCleanup"}
 )
 
+// DISMCommandLine is the exact argument list oow passes to Dism.exe for the
+// analysis or the cleanup; the sandbox records it for each simulated run.
+func DISMCommandLine(cleanup bool) string {
+	if cleanup {
+		return strings.Join(dismCleanupArgs, " ")
+	}
+	return strings.Join(dismAnalyzeArgs, " ")
+}
+
 // Time limits. The analysis usually takes one to five minutes; the cleanup
 // takes minutes to well over an hour on a store that was never cleaned.
 // Neither limit ever stops DISM: oow only stops waiting (see waitDISM).

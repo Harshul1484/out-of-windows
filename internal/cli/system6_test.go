@@ -1,7 +1,9 @@
 package cli_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/Harshul1484/out-of-windows/internal/cli"
 	"github.com/Harshul1484/out-of-windows/internal/envpath"
+	"github.com/Harshul1484/out-of-windows/internal/optimize"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 )
@@ -336,6 +339,24 @@ type simOptimizeState struct {
 	ComponentStoreReport string   `json:"component_store_report"`
 }
 
+// dismCalls returns the simulated DISM command lines run so far.
+func (e *env) dismCalls() []string {
+	e.t.Helper()
+	data, err := os.ReadFile(sandbox.DISMLog(e.root))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(strings.ReplaceAll(string(data), "\r", "")), "\n")
+}
+
+const (
+	dismAnalyze = "Dism.exe /Online /English /Cleanup-Image /AnalyzeComponentStore"
+	dismCleanup = "Dism.exe /Online /English /Quiet /NoRestart /Cleanup-Image /StartComponentCleanup"
+)
+
 func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 	e := newEnv(t)
 	before := e.state()
@@ -344,14 +365,16 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 	if code != 0 || d.Schema != "oow.optimize/v1" || !d.DryRun || len(d.Tasks) != 4 || d.Results != nil {
 		t.Fatalf("dry run (code %d): %s", code, out)
 	}
-	for _, it := range d.Tasks {
+	for _, it := range d.Tasks[:3] {
 		if it.Status != "ready" || !it.Selected {
 			t.Errorf("task %+v", it)
 		}
 	}
-	if cs := d.Tasks[3].ComponentStore; d.Tasks[3].Task.ID != "optimize.component-store" || cs == nil || !cs.Recommended ||
-		cs.ReclaimablePackages != 4 || cs.ActualBytes != 6979321856 || d.Tasks[3].BytesBefore != cs.ActualBytes {
-		t.Errorf("component store = %+v", d.Tasks[3])
+	// Opt-in: listed as ready, never preselected, and DISM is not started.
+	if it := d.Tasks[3]; it.Task.ID != "optimize.component-store" || it.Status != "ready" || it.Selected ||
+		it.ComponentStore != nil || it.BytesBefore != -1 || !strings.HasPrefix(it.Reason, "opt-in: ") ||
+		!strings.Contains(it.Reason, "`oow optimize --task component-store`") {
+		t.Errorf("component store = %+v", it)
 	}
 	notes := map[string]bool{}
 	for _, n := range d.Notes {
@@ -370,28 +393,38 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 	if _, _, code := e.run("optimize", "--yes"); code != 0 {
 		t.Errorf("OOW_DRY_RUN: code %d", code)
 	}
+	// Named in a preview: DISM analyzes (read-only), the system stays as it was.
+	out, _, _ = e.run("optimize", "--task", "component-store", "--dry-run", "--json")
+	d = decode[optimizeDoc](t, out)
+	if it := d.Tasks[0]; len(d.Tasks) != 1 || it.Status != "ready" || !it.Selected || it.Reason != "" ||
+		it.ComponentStore == nil || !it.ComponentStore.Recommended || it.ComponentStore.ReclaimablePackages != 4 ||
+		it.ComponentStore.ActualBytes != 6979321856 || it.BytesBefore != 6979321856 {
+		t.Errorf("named preview = %s", out)
+	}
 	e.assertUnchanged(before, "optimize preview")
+	if calls := e.dismCalls(); len(calls) != 1 || calls[0] != dismAnalyze {
+		t.Errorf("DISM calls in previews = %q", calls)
+	}
 
+	// --yes alone: the three preselected tasks, and DISM is never started.
 	t.Setenv("OOW_DRY_RUN", "")
 	out, _, code = e.run("optimize", "--yes", "--json")
 	d = decode[optimizeDoc](t, out)
-	if code != 0 || len(d.Results) != 4 {
+	if code != 0 || len(d.Results) != 3 {
 		t.Fatalf("run (code %d): %s", code, out)
 	}
 	for _, r := range d.Results {
-		if r.Status != "done" {
+		if r.Status != "done" || r.ID == "optimize.component-store" {
 			t.Errorf("result %+v", r)
 		}
 	}
-	// 6.50 GB before, 5.25 GB after (measured by analyzing again).
-	if r := d.Results[3]; r.Freed != 1342177280 || r.BytesAfter != 5637144576 || r.ComponentStore == nil ||
-		r.ComponentStore.Recommended || !strings.Contains(r.Message, "1.2 GB freed") {
-		t.Errorf("component store result = %+v", r)
-	}
 	var st simOptimizeState
 	e.registry("optimize.json", &st)
-	if st.DNSFlushes != 1 || len(st.Retrimmed) != 1 || st.Retrimmed[0] != `C:\` || st.ComponentCleanups != 1 {
+	if st.DNSFlushes != 1 || len(st.Retrimmed) != 1 || st.Retrimmed[0] != `C:\` || st.ComponentCleanups != 0 {
 		t.Errorf("simulated state = %+v", st)
+	}
+	if calls := e.dismCalls(); len(calls) != 1 {
+		t.Errorf("--yes started DISM: %q", calls)
 	}
 	if entries, _ := os.ReadDir(sandbox.DOCacheDir(e.root)); len(entries) != 0 {
 		t.Errorf("Delivery Optimization cache not emptied: %v", entries)
@@ -400,8 +433,35 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 		t.Error("system file removed")
 	}
 	hist, _, _ := e.run("history", "--json")
-	// Delivery Optimization (5 MB) plus the component store (1.25 GB).
-	if !strings.Contains(hist, `"command": "optimize"`) || !strings.Contains(hist, `"reclaimed_bytes": 1347177280`) {
+	if !strings.Contains(hist, `"command": "optimize"`) || !strings.Contains(hist, `"reclaimed_bytes": 5000000`) {
+		t.Errorf("history = %s", hist)
+	}
+
+	// Named with --yes: analysis in the plan, again right before acting, the
+	// cleanup, and the measurement afterwards (6.50 GB before, 5.25 GB after).
+	out, _, code = e.run("optimize", "--task", "component-store", "--yes", "--json")
+	d = decode[optimizeDoc](t, out)
+	if code != 0 || len(d.Results) != 1 {
+		t.Fatalf("component store run (code %d): %s", code, out)
+	}
+	if r := d.Results[0]; r.Status != "done" || r.Freed != 1342177280 || r.BytesAfter != 5637144576 || r.ComponentStore == nil ||
+		r.ComponentStore.Recommended || !strings.Contains(r.Message, "1.2 GB freed") {
+		t.Errorf("component store result = %+v", r)
+	}
+	if calls := e.dismCalls(); strings.Join(calls[1:], " ") != strings.Join([]string{dismAnalyze, dismAnalyze, dismCleanup, dismAnalyze}, " ") {
+		t.Errorf("DISM calls = %q", calls)
+	}
+	for _, c := range e.dismCalls() {
+		if strings.Contains(strings.ToLower(c), "resetbase") || strings.Contains(strings.ToLower(c), "spsuperseded") {
+			t.Errorf("forbidden DISM option: %s", c)
+		}
+	}
+	e.registry("optimize.json", &st)
+	if st.ComponentCleanups != 1 {
+		t.Errorf("cleanups = %d", st.ComponentCleanups)
+	}
+	hist, _, _ = e.run("history", "--json")
+	if !strings.Contains(hist, `"reclaimed_bytes": 1342177280`) {
 		t.Errorf("history = %s", hist)
 	}
 	// DISM no longer recommends a cleanup: nothing to do.
@@ -414,50 +474,64 @@ func TestOptimizePreviewConfirmAndRun(t *testing.T) {
 
 func TestOptimizeComponentStoreText(t *testing.T) {
 	e := newEnv(t)
-	text, _, code := e.run("optimize", "--task", "component-store", "--dry-run")
-	for _, want := range []string{"Clean up the component store (WinSxS)", "store 6.5 GB, overhead 2.4 GB, 4 reclaimable packages",
+	text, _, code := e.run("optimize", "--dry-run")
+	for _, want := range []string{"Clean up the component store (WinSxS)  opt-in", "opt-in: it can take over an hour",
+		"choose it in the list or run `oow optimize --task", "Dry run: nothing was run"} {
+		if code != 0 || !strings.Contains(text, want) {
+			t.Errorf("default plan lacks %q (code %d):\n%s", want, code, text)
+		}
+	}
+	text, _, code = e.run("optimize", "--task", "component-store", "--dry-run")
+	for _, want := range []string{"Clean up the component store (WinSxS)  ready", "store 6.5 GB, overhead 2.4 GB, 4 reclaimable packages",
 		"StartComponentCleanup", "/ResetBase", "Ctrl+C", "Dry run: nothing was run"} {
 		if code != 0 || !strings.Contains(text, want) {
-			t.Errorf("missing %q (code %d):\n%s", want, code, text)
+			t.Errorf("named plan lacks %q (code %d):\n%s", want, code, text)
 		}
 	}
 	help, _, _ := e.run("optimize", "--help")
-	for _, want := range []string{"component-store", "SoftwareDistribution\\Download) is not cleaned", "left to finish"} {
+	for _, want := range []string{"component-store", "never preselected", "SoftwareDistribution\\Download) is not cleaned", "left"} {
 		if !strings.Contains(help, want) {
 			t.Errorf("help lacks %q:\n%s", want, help)
 		}
 	}
 }
 
-// A DISM report that cannot be read (here: localized) makes the task
-// unavailable; --yes runs the other tasks and never the cleanup.
-func TestOptimizeUnreadableDISMReportNeverRuns(t *testing.T) {
-	e := newEnv(t)
+// setDISMReport replaces the simulated DISM report.
+func (e *env) setDISMReport(edit func(string) string) {
+	e.t.Helper()
 	path := filepath.Join(e.root, "registry", "optimize.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	report := raw["component_store_report"].(string)
-	raw["component_store_report"] = strings.ReplaceAll(strings.ReplaceAll(report,
-		"Component Store Cleanup Recommended : Yes", "Bereinigung des Komponentenspeichers empfohlen : Ja"),
-		"Actual Size of Component Store", "Tatsächliche Größe des Komponentenspeichers")
+	raw["component_store_report"] = edit(raw["component_store_report"].(string))
 	if data, err = json.Marshal(raw); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
+		e.t.Fatal(err)
 	}
-	out, _, code := e.run("optimize", "--yes", "--json")
+}
+
+// A DISM report that cannot be read (here: localized) makes the named task
+// unavailable, and the cleanup never runs.
+func TestOptimizeUnreadableDISMReportNeverRuns(t *testing.T) {
+	e := newEnv(t)
+	e.setDISMReport(func(report string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(report,
+			"Component Store Cleanup Recommended : Yes", "Bereinigung des Komponentenspeichers empfohlen : Ja"),
+			"Actual Size of Component Store", "Tatsächliche Größe des Komponentenspeichers")
+	})
+	out, _, code := e.run("optimize", "--task", "component-store", "--yes", "--json")
 	d := decode[optimizeDoc](t, out)
-	if code != 0 || len(d.Results) != 3 {
+	if code != 0 || len(d.Tasks) != 1 || d.Results != nil {
 		t.Fatalf("run (code %d): %s", code, out)
 	}
-	it := d.Tasks[3]
+	it := d.Tasks[0]
 	if it.Status != "unavailable" || it.Selected || it.ComponentStore != nil || it.BytesBefore != -1 ||
 		!strings.Contains(it.Reason, "could not be read") {
 		t.Errorf("unreadable report = %+v", it)
@@ -466,6 +540,55 @@ func TestOptimizeUnreadableDISMReportNeverRuns(t *testing.T) {
 	e.registry("optimize.json", &st)
 	if st.ComponentCleanups != 0 {
 		t.Error("the cleanup ran without a readable recommendation")
+	}
+	for _, c := range e.dismCalls() {
+		if c != dismAnalyze {
+			t.Errorf("DISM call %s", c)
+		}
+	}
+}
+
+// The sandbox runner end to end through optimize.Plan and optimize.Run: a
+// task ticked in the list without a plan-time analysis is analyzed first, and
+// a cleanup DISM no longer recommends at run time is skipped.
+func TestOptimizeSandboxRunnerRechecksBeforeActing(t *testing.T) {
+	e := newEnv(t)
+	sys := sandbox.Optimizer{Root: e.root}
+	ctx := context.Background()
+
+	plan := optimize.Plan(ctx, sys, true, optimize.Tasks(), nil)
+	if len(e.dismCalls()) != 0 {
+		t.Fatal("the default plan started DISM")
+	}
+	for i := range plan {
+		plan[i].Selected = plan[i].Task.ID == optimize.TaskComponentStore // ticked in the list
+	}
+	res := optimize.Run(ctx, sys, plan)
+	if len(res) != 1 || res[0].Status != optimize.Done || res[0].Freed != 1342177280 {
+		t.Fatalf("ticked = %+v", res)
+	}
+	if calls := e.dismCalls(); strings.Join(calls, " ") != strings.Join([]string{dismAnalyze, dismCleanup, dismAnalyze}, " ") {
+		t.Errorf("DISM calls = %q", calls)
+	}
+
+	// Recommended when planned, not any more right before acting.
+	e = newEnv(t)
+	sys = sandbox.Optimizer{Root: e.root}
+	plan = optimize.Plan(ctx, sys, true, optimize.Tasks(), []string{"component-store"})
+	if it := plan[3]; it.Status != optimize.Ready || !it.Selected {
+		t.Fatalf("plan = %+v", it)
+	}
+	e.setDISMReport(func(report string) string {
+		return strings.Replace(report, "Component Store Cleanup Recommended : Yes", "Component Store Cleanup Recommended : No", 1)
+	})
+	res = optimize.Run(ctx, sys, plan)
+	var st simOptimizeState
+	e.registry("optimize.json", &st)
+	if r := res[3]; r.Status != optimize.Skipped || st.ComponentCleanups != 0 || !strings.Contains(r.Message, "DISM does not recommend it now") {
+		t.Errorf("not recommended at run time = %+v (cleanups %d)", r, st.ComponentCleanups)
+	}
+	if calls := e.dismCalls(); len(calls) != 2 || calls[1] != dismAnalyze {
+		t.Errorf("DISM calls = %q", calls)
 	}
 }
 

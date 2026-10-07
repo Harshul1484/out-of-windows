@@ -419,6 +419,23 @@ func (o Optimizer) ReTrim(ctx context.Context, v optimize.Volume) error {
 	return saveState(o.file(), s)
 }
 
+// DISMLog records each simulated DISM run as the command line the real runner
+// would use, one per line. It lives at the sandbox root, outside the
+// simulated drive and registry, so previews leave the simulated system as it was.
+func DISMLog(root string) string { return filepath.Join(root, "dism-calls.log") }
+
+func (o Optimizer) logDISM(cleanup bool) error {
+	f, err := os.OpenFile(DISMLog(o.Root), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "Dism.exe %s\n", optimize.DISMCommandLine(cleanup))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // AnalyzeComponentStore reads the simulated DISM report through the same
 // parser as the real one.
 func (o Optimizer) AnalyzeComponentStore(ctx context.Context) (optimize.ComponentStore, error) {
@@ -428,6 +445,9 @@ func (o Optimizer) AnalyzeComponentStore(ctx context.Context) (optimize.Componen
 	}
 	if s.ComponentStoreReport == "" {
 		return optimize.ComponentStore{}, optimize.ErrNoDISM
+	}
+	if err := o.logDISM(false); err != nil {
+		return optimize.ComponentStore{}, err
 	}
 	return optimize.ParseComponentStoreReport([]byte(s.ComponentStoreReport))
 }
@@ -440,6 +460,9 @@ func (o Optimizer) CleanupComponentStore(ctx context.Context) (bool, error) {
 	}
 	if s.ComponentStoreReport == "" {
 		return false, optimize.ErrNoDISM
+	}
+	if err := o.logDISM(true); err != nil {
+		return false, err
 	}
 	s.ComponentCleanups++
 	if s.ComponentStoreAfter != "" {

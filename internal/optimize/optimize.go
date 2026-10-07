@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 )
 
 // Task is one maintenance task.
@@ -26,6 +28,10 @@ type Task struct {
 	Why           string `json:"why"`
 	Effect        string `json:"effect"`
 	RequiresAdmin bool   `json:"requires_admin"`
+	// OptIn tasks have a visible cost (time) and an owner that already does
+	// the same on its own schedule: they are never preselected, and Plan does
+	// not even measure them unless the user names them (--task).
+	OptIn bool `json:"-"`
 }
 
 // Task IDs.
@@ -71,13 +77,15 @@ func Tasks() []*Task {
 			ID:   TaskComponentStore,
 			Name: "Clean up the component store (WinSxS)",
 			What: "Runs DISM /Online /Cleanup-Image /StartComponentCleanup, Windows' own tool, which removes superseded " +
-				"versions of updated system components. Offered only when DISM's analysis recommends it. Never /ResetBase.",
+				"versions of updated system components, only when DISM's analysis right before it recommends a cleanup. " +
+				"Never /ResetBase.",
 			Why: "Windows keeps previous versions of updated components so an update can be rolled back. Its own " +
 				"scheduled cleanup removes them only 30 days later, within a 1-hour limit, and can fall behind.",
 			Effect: "Frees part of the store's overhead (measured by analyzing again afterwards). The removed versions are gone " +
 				"at once, without the 30-day grace period; installed updates can still be uninstalled. Can take from minutes " +
 				"to over an hour; once started, DISM is left to finish, even if you press Ctrl+C.",
 			RequiresAdmin: true,
+			OptIn:         true,
 		},
 	}
 }
@@ -131,7 +139,8 @@ type Item struct {
 	Task   *Task  `json:"task"`
 	Status Status `json:"status"`
 	Reason string `json:"reason,omitempty"`
-	// Selected is whether it runs (by default every ready task).
+	// Selected is whether it runs: by default every ready task, except
+	// opt-in tasks the user did not name.
 	Selected bool `json:"selected"`
 	// BytesBefore is the size of what the task cleans (-1 unknown): the
 	// Delivery Optimization cache, or the component store's actual size.
@@ -144,11 +153,31 @@ type Item struct {
 // ReasonNeedsAdmin explains admin-only tasks in a non-elevated process.
 const ReasonNeedsAdmin = "requires administrator: run oow from an elevated terminal"
 
-// Plan describes what each task would do now. It changes nothing.
-func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item {
+// reasonOptIn explains why the component store cleanup is not preselected.
+var reasonOptIn = "opt-in: it can take over an hour, and Windows also runs this cleanup on its own schedule; " +
+	"choose it in the list or run `" + buildinfo.Name + " optimize --task component-store`"
+
+// Named reports whether filters (the --task values) name the task itself,
+// with or without its "optimize." prefix, rather than a prefix covering all.
+func Named(filters []string, id string) bool {
+	short := strings.TrimPrefix(id, "optimize.")
+	for _, f := range filters {
+		f = strings.ToLower(strings.TrimSpace(f))
+		if f == id || f == short {
+			return true
+		}
+	}
+	return false
+}
+
+// Plan describes what each task would do now. It changes nothing. filters
+// are the --task values: an opt-in task is measured and preselected only when
+// they name it; otherwise it is listed, unselected, without running anything.
+func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task, filters []string) []Item {
 	var out []Item
 	for _, t := range tasks {
 		it := Item{Task: t, Status: Ready}
+		named := Named(filters, t.ID)
 		switch t.ID {
 		case TaskDO:
 			c := sys.DeliveryOptimization(ctx, elevated)
@@ -179,6 +208,12 @@ func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item 
 				it.Status, it.Reason = NeedsAdmin, ReasonNeedsAdmin
 				break
 			}
+			if !named {
+				// Not requested: DISM is not started at all. If the user
+				// ticks it later, Run analyzes before acting.
+				it.Reason = reasonOptIn
+				break
+			}
 			cs, err := sys.AnalyzeComponentStore(ctx)
 			switch {
 			case err != nil:
@@ -195,7 +230,7 @@ func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item 
 				it.Status, it.Reason = NeedsAdmin, ReasonNeedsAdmin
 			}
 		}
-		it.Selected = it.Status == Ready
+		it.Selected = it.Status == Ready && (!t.OptIn || named)
 		out = append(out, it)
 	}
 	return out
@@ -205,7 +240,7 @@ func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item 
 type Result struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Status  string `json:"status"` // done, failed, partial, cancelled
+	Status  string `json:"status"` // done, failed, partial, cancelled, skipped
 	Message string `json:"message"`
 	// BytesBefore/BytesAfter: size of what the task cleans around the run
 	// (Delivery Optimization cache, component store; -1 unknown); Freed is
@@ -233,6 +268,8 @@ const (
 	Failed    = "failed"
 	Partial   = "partial"
 	Cancelled = "cancelled"
+	// Skipped: checked right before acting and found nothing to do; not run.
+	Skipped = "skipped"
 )
 
 // Run runs the selected ready items in order. Cancellation stops before the
@@ -310,7 +347,7 @@ func Run(ctx context.Context, sys Runner, items []Item) []Result {
 				r.Status = Done
 			}
 		case TaskComponentStore:
-			runComponentStore(ctx, sys, it, &r)
+			runComponentStore(ctx, sys, &r)
 		default:
 			r.Status, r.Message = Failed, "unknown task"
 		}
@@ -320,11 +357,30 @@ func Run(ctx context.Context, sys Runner, items []Item) []Result {
 	return out
 }
 
-// runComponentStore runs DISM's cleanup, then measures the store again. The
-// cleanup is not interrupted by cancellation; the measurement afterwards is
-// skipped when the user cancelled.
-func runComponentStore(ctx context.Context, sys Runner, it Item, r *Result) {
-	r.BytesBefore, r.BytesAfter = it.BytesBefore, -1
+// runComponentStore analyzes the store, runs DISM's cleanup only if that
+// fresh analysis recommends it, then measures the store again. The cleanup is
+// not interrupted by cancellation; the measurement afterwards is skipped when
+// the user cancelled.
+func runComponentStore(ctx context.Context, sys Runner, r *Result) {
+	r.BytesBefore, r.BytesAfter = -1, -1
+	// Re-check right before acting: a plan-time analysis (or none, when the
+	// task was ticked in the list) is never trusted on its own.
+	before, err := sys.AnalyzeComponentStore(ctx)
+	switch {
+	case ctx.Err() != nil:
+		r.Status, r.Message = Cancelled, "not started: cancelled during DISM's analysis (nothing was changed)"
+		return
+	case err != nil:
+		r.Status, r.Message = Failed, "the cleanup was not run: DISM's analysis right before it failed: "+err.Error()
+		return
+	}
+	r.BytesBefore = before.ActualBytes
+	if !before.Recommended {
+		r.ComponentStore, r.BytesAfter = &before, before.ActualBytes
+		r.Status, r.Message = Skipped, fmt.Sprintf("the cleanup was not run: DISM does not recommend it now (%s)",
+			reclaimablePackages(before.ReclaimablePackages))
+		return
+	}
 	restart, err := sys.CleanupComponentStore(ctx)
 	if err != nil {
 		r.Status, r.Message = Failed, err.Error()
