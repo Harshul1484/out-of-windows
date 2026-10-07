@@ -424,7 +424,7 @@ func FuzzGuardScope(f *testing.F) {
 func TestSelfRemovePurpose(t *testing.T) {
 	cfg, data := `C:\Users\alice\AppData\Roaming\oow`, `C:\Users\alice\AppData\Local\oow`
 	g := NewGuard(testLocations(), nil)
-	for _, p := range []string{cfg, data, `\?\C:\Users\alice\AppData\Local\OOW\`} {
+	for _, p := range []string{cfg, data, `\\?\C:\Users\alice\AppData\Local\OOW\`} {
 		if d := g.Check(Request{Path: p, Purpose: PurposeSelfRemove}); !d.Allowed {
 			t.Errorf("own folder %s denied: %s", p, d.Reason)
 		}
