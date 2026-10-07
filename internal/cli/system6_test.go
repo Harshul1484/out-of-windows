@@ -58,9 +58,14 @@ type startupDoc struct {
 		State       string `json:"state"`
 		TargetState string `json:"target_state"`
 		Toggleable  bool   `json:"toggleable"`
+		NeedsAdmin  bool   `json:"needs_admin"`
 		Approval    *struct {
 			Data string `json:"data"`
 		} `json:"approval"`
+		Task *struct {
+			Path  string `json:"path"`
+			RunAs string `json:"run_as"`
+		} `json:"task"`
 	} `json:"entries"`
 	Summary struct {
 		Total, Enabled, Disabled, Broken int
@@ -74,11 +79,12 @@ type changeDoc struct {
 	Action  string `json:"action"`
 	DryRun  bool   `json:"dry_run"`
 	Results []struct {
-		Status string `json:"status"`
-		Reason string `json:"reason"`
-		Before string `json:"before"`
-		After  string `json:"after"`
-		Entry  struct {
+		Status            string `json:"status"`
+		Reason            string `json:"reason"`
+		Before            string `json:"before"`
+		After             string `json:"after"`
+		TaskEnabledBefore *bool  `json:"task_enabled_before"`
+		Entry             struct {
 			ID    string `json:"id"`
 			State string `json:"state"`
 		} `json:"entry"`
@@ -109,7 +115,7 @@ func TestStartupListJSON(t *testing.T) {
 	}
 	d := decode[startupDoc](t, out)
 	s := d.Summary
-	if d.Schema != "oow.startup/v1" || s.Total != 12 || s.Enabled != 9 || s.Disabled != 2 || s.RunsOnce != 1 || s.Broken != 3 ||
+	if d.Schema != "oow.startup/v1" || s.Total != 14 || s.Enabled != 11 || s.Disabled != 2 || s.RunsOnce != 1 || s.Broken != 4 ||
 		d.Warnings == nil {
 		t.Errorf("doc = %+v", d)
 	}
@@ -128,13 +134,32 @@ func TestStartupListJSON(t *testing.T) {
 		"Litware Tray":     "enabled/missing",
 		"Old Notes.lnk":    "enabled/missing",
 		"backup.cmd":       "disabled/found",
+		// Scheduled tasks: the user's own sign-in task, and one running as SYSTEM.
+		"Tailspin Sync":                    "enabled/missing",
+		`Wingtip Toys\Wingtip Logon Check`: "enabled/found",
 	} {
 		if states[name] != want {
 			t.Errorf("%s = %q, want %q", name, states[name], want)
 		}
 	}
+	for _, en := range d.Entries {
+		switch en.Name {
+		case "Tailspin Sync":
+			if en.ID != "task-logon:Tailspin Sync" || !en.Toggleable || en.NeedsAdmin || en.Approval != nil ||
+				en.Task == nil || en.Task.Path != `\Tailspin Sync` {
+				t.Errorf("user task = %+v", en)
+			}
+		case `Wingtip Toys\Wingtip Logon Check`:
+			if !en.NeedsAdmin || en.Task == nil || en.Task.RunAs != "SYSTEM" {
+				t.Errorf("SYSTEM task = %+v", en)
+			}
+		}
+		if strings.Contains(en.Name, "FamilySafetyMonitor") {
+			t.Error("a Windows task (\\Microsoft\\) is listed")
+		}
+	}
 	text, _, code := e.run("startup")
-	if code != 0 || !strings.Contains(text, "3 broken") || strings.Contains(text, "\x1b[") || strings.Contains(text, "desktop.ini") {
+	if code != 0 || !strings.Contains(text, "4 broken") || strings.Contains(text, "\x1b[") || strings.Contains(text, "desktop.ini") {
 		t.Errorf("text (code %d):\n%s", code, text)
 	}
 	e.assertUnchanged(before, "listing")
@@ -205,6 +230,69 @@ func TestStartupDisableEnableRoundTrip(t *testing.T) {
 	if len(h.Records) != 2 || h.Records[0].Command != "startup" || len(h.Records[0].Changes) != 1 ||
 		h.Records[0].Changes[0].Action != "enabled" || h.Records[1].Changes[0].Action != "disabled" ||
 		h.Records[1].Changes[0].Status != "changed" {
+		t.Errorf("history = %s", hist)
+	}
+}
+
+type simTask struct {
+	Path    string `json:"path"`
+	Enabled bool   `json:"enabled"`
+	Actions []struct {
+		Command string `json:"command"`
+	} `json:"actions"`
+}
+
+func (e *env) simTasks() map[string]simTask {
+	e.t.Helper()
+	var list []simTask
+	e.registry("tasks.json", &list)
+	out := map[string]simTask{}
+	for _, t := range list {
+		out[t.Path] = t
+	}
+	return out
+}
+
+// A scheduled task is switched with its own Enabled flag: the task stays
+// registered and unchanged otherwise, and history records the old flag.
+func TestStartupTaskDisableEnableRoundTrip(t *testing.T) {
+	e := newEnv(t)
+	before := e.simTasks()
+	out, _, code := e.run("startup", "disable", "Tailspin Sync", "--yes", "--json")
+	d := decode[changeDoc](t, out)
+	if code != 0 || len(d.Results) != 1 || d.Results[0].Status != "changed" || d.Results[0].Entry.State != "disabled" ||
+		d.Results[0].Before != "" || d.Results[0].After != "" || d.Results[0].TaskEnabledBefore == nil || !*d.Results[0].TaskEnabledBefore {
+		t.Fatalf("disable (code %d): %s", code, out)
+	}
+	after := e.simTasks()
+	if len(after) != len(before) || after[`\Tailspin Sync`].Enabled ||
+		after[`\Tailspin Sync`].Actions[0].Command != before[`\Tailspin Sync`].Actions[0].Command {
+		t.Errorf("tasks after disable = %+v", after)
+	}
+	for path, task := range after {
+		if path != `\Tailspin Sync` && task.Enabled != before[path].Enabled {
+			t.Errorf("%s changed", path)
+		}
+	}
+	var st struct {
+		Approved map[string]map[string]string `json:"approved"`
+	}
+	e.registry("startup.json", &st)
+	for key, values := range st.Approved {
+		if _, ok := values["Tailspin Sync"]; ok {
+			t.Errorf("a StartupApproved value was written for a task under %s", key)
+		}
+	}
+	out, _, code = e.run("startup", "enable", "task-logon:Tailspin Sync", "--yes", "--json")
+	if d := decode[changeDoc](t, out); code != 0 || d.Results[0].Status != "changed" || *d.Results[0].TaskEnabledBefore {
+		t.Fatalf("enable (code %d): %s", code, out)
+	}
+	if !e.simTasks()[`\Tailspin Sync`].Enabled {
+		t.Error("task not enabled again")
+	}
+	hist, _, _ := e.run("history", "--json")
+	if !strings.Contains(hist, `scheduled task \\Tailspin Sync, Enabled before: true`) ||
+		!strings.Contains(hist, `scheduled task \\Tailspin Sync, Enabled before: false`) {
 		t.Errorf("history = %s", hist)
 	}
 }
@@ -417,7 +505,7 @@ func TestRepairPreviewConfirmAndApply(t *testing.T) {
 			t.Errorf("unselected fix without a reason: %+v", f)
 		}
 	}
-	if len(d.Fixes) != 7 || sel != 6 {
+	if len(d.Fixes) != 8 || sel != 7 {
 		t.Errorf("fixes = %+v", d.Fixes)
 	}
 	if _, _, code := e.run("repair"); code != cli.ExitNeedsConfirm {
@@ -432,7 +520,7 @@ func TestRepairPreviewConfirmAndApply(t *testing.T) {
 	t.Setenv("OOW_DRY_RUN", "")
 	out, _, code = e.run("repair", "--yes", "--json")
 	d = decode[repairDoc](t, out)
-	if code != 0 || d.Outcome == nil || d.Outcome.Fixed != 6 || d.Outcome.Failed != 0 || d.Outcome.Backup == "" {
+	if code != 0 || d.Outcome == nil || d.Outcome.Fixed != 7 || d.Outcome.Failed != 0 || d.Outcome.Backup == "" {
 		t.Fatalf("apply (code %d): %s", code, out)
 	}
 	testutil.AssertInSandbox(t, d.Outcome.Backup)
@@ -456,10 +544,13 @@ func TestRepairPreviewConfirmAndApply(t *testing.T) {
 		!strings.Contains(u, `%USERPROFILE%\go\bin`) || !strings.Contains(u, `%TOOLS_HOME%\bin`) || envAfter.Broadcasts != 1 {
 		t.Errorf("user PATH after repair = %q (broadcasts %d)", u, envAfter.Broadcasts)
 	}
-	for _, name := range []string{"Fabrikam Updater", "Old Notes.lnk", "Litware Tray"} {
+	for _, name := range []string{"Fabrikam Updater", "Old Notes.lnk", "Litware Tray", "Tailspin Sync"} {
 		if got := e.startupState(name); got != "disabled" {
 			t.Errorf("%s = %s after repair", name, got)
 		}
+	}
+	if tk := e.simTasks(); len(tk) != 3 || tk[`\Tailspin Sync`].Enabled || !tk[`\Wingtip Toys\Wingtip Logon Check`].Enabled {
+		t.Errorf("tasks after repair = %+v (the broken task is disabled, never removed; working tasks untouched)", tk)
 	}
 	if !e.exists(`C\Users\sandbox\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Old Notes.lnk`) {
 		t.Error("the shortcut itself was removed")

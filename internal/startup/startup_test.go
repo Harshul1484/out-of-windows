@@ -222,10 +222,11 @@ func TestFind(t *testing.T) {
 
 // memStore is an in-memory startup.Store.
 type memStore struct {
-	raws    []startup.Raw
-	written map[string][]byte
-	failSet error
-	lie     bool // pretend to write but keep the old value (verification must catch it)
+	raws       []startup.Raw
+	written    map[string][]byte
+	taskWrites int
+	failSet    error
+	lie        bool // pretend to write but keep the old value (verification must catch it)
 }
 
 func (m *memStore) List(ctx context.Context) ([]startup.Entry, []string, error) {
@@ -243,10 +244,29 @@ func (m *memStore) SetApproval(e startup.Entry, data []byte) error {
 	if m.failSet != nil {
 		return m.failSet
 	}
+	if e.Task != nil {
+		return errors.New("SetApproval called for a scheduled task")
+	}
 	if !m.lie {
 		m.written[e.ID] = data
 	}
 	return nil
+}
+
+func (m *memStore) SetTaskEnabled(e startup.Entry, enabled bool) error {
+	if m.failSet != nil {
+		return m.failSet
+	}
+	for _, r := range m.raws {
+		if r.Task != nil && r.Task.Path == e.Location {
+			m.taskWrites++
+			if !m.lie {
+				r.Task.Enabled = enabled
+			}
+			return nil
+		}
+	}
+	return startup.ErrEntryGone
 }
 
 func TestSetEnabled(t *testing.T) {

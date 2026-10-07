@@ -1,8 +1,10 @@
 // Package startup lists the programs Windows starts when the user signs in
-// (Run and RunOnce registry values, the user and common Startup folders) and
-// enables or disables them the way Task Manager does: by writing the
-// Explorer\StartupApproved value that belongs to the entry. Disabling is
-// reversible and never deletes or edits the entry itself.
+// (Run and RunOnce registry values, the user and common Startup folders, and
+// scheduled tasks that run at sign-in or at startup) and enables or disables
+// them the way Task Manager and Task Scheduler do: by writing the
+// Explorer\StartupApproved value that belongs to a registry or folder entry,
+// or the Enabled flag of a scheduled task. Disabling is reversible and never
+// deletes or edits the entry itself.
 //
 // # StartupApproved values
 //
@@ -37,7 +39,9 @@ import (
 	"time"
 
 	"github.com/Harshul1484/out-of-windows/internal/apps"
+	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 	"github.com/Harshul1484/out-of-windows/internal/system"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
 // Source is where an entry is registered.
@@ -53,12 +57,14 @@ const (
 	SourceHKLMRunOnce32 Source = "hklm-runonce32"
 	SourceUserFolder    Source = "startup-folder"
 	SourceCommonFolder  Source = "common-startup-folder"
+	SourceTaskLogon     Source = "task-logon" // scheduled task with a sign-in trigger
+	SourceTaskBoot      Source = "task-boot"  // scheduled task with a startup (boot) trigger
 )
 
 // SourceOrder lists every source in display order.
 var SourceOrder = []Source{
-	SourceHKCURun, SourceUserFolder, SourceHKCURunOnce,
-	SourceHKLMRun, SourceHKLMRun32, SourceCommonFolder, SourceHKLMRunOnce, SourceHKLMRunOnce32,
+	SourceHKCURun, SourceUserFolder, SourceHKCURunOnce, SourceTaskLogon,
+	SourceHKLMRun, SourceHKLMRun32, SourceCommonFolder, SourceHKLMRunOnce, SourceHKLMRunOnce32, SourceTaskBoot,
 }
 
 const (
@@ -83,6 +89,9 @@ var sources = map[Source]sourceInfo{
 	SourceHKLMRunOnce32: {"Registry, once, 32-bit (all users)", `HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce`, true, ""},
 	SourceUserFolder:    {"Startup folder (this user)", "", false, "StartupFolder"},
 	SourceCommonFolder:  {"Startup folder (all users)", "", true, "StartupFolder"},
+	// A task's scope depends on its account and triggers (see Build).
+	SourceTaskLogon: {"Scheduled task, at sign-in", "Task Scheduler", true, ""},
+	SourceTaskBoot:  {"Scheduled task, at startup", "Task Scheduler", true, ""},
 }
 
 // Label is a short description of the source.
@@ -93,6 +102,9 @@ func (s Source) Machine() bool { return sources[s].machine }
 
 // Folder reports whether the source is a Startup folder.
 func (s Source) Folder() bool { return s == SourceUserFolder || s == SourceCommonFolder }
+
+// Task reports whether the source is a scheduled task.
+func (s Source) Task() bool { return s == SourceTaskLogon || s == SourceTaskBoot }
 
 // ApprovalKey returns the StartupApproved key (as HKCU\... or HKLM\...) that
 // holds the enabled/disabled state of entries from s, or "" when the source
@@ -137,11 +149,11 @@ type Entry struct {
 	// SourceLabel describes Source for people.
 	SourceLabel string `json:"source_label"`
 	Scope       string `json:"scope"` // "user" or "machine"
-	// Location is the registry key holding the entry, or the file in the
-	// Startup folder.
+	// Location is the registry key holding the entry, the file in the
+	// Startup folder, or the scheduled task's path.
 	Location string `json:"location"`
-	// Command is what runs: the Run value, or the shortcut's target and
-	// arguments (or the file itself).
+	// Command is what runs: the Run value, the shortcut's target and
+	// arguments (or the file itself), or the task's first program action.
 	Command string `json:"command"`
 	// Target is the program file the command starts, when it could be
 	// determined, and TargetState whether it exists.
@@ -151,10 +163,31 @@ type Entry struct {
 	State       State           `json:"state"`
 	DisabledAt  *time.Time      `json:"disabled_at,omitempty"`
 	Approval    *Approval       `json:"approval,omitempty"`
+	// Task describes the scheduled task behind task-logon and task-boot
+	// entries, whose state is the task's own Enabled flag.
+	Task *TaskInfo `json:"task,omitempty"`
 	// Toggleable reports whether oow can enable or disable the entry.
 	Toggleable bool `json:"toggleable"`
 	// NeedsAdmin reports whether changing it needs administrator rights.
 	NeedsAdmin bool `json:"needs_admin"`
+}
+
+// TaskInfo describes a scheduled task listed as a startup entry.
+type TaskInfo struct {
+	// Path is the task's path in the Task Scheduler library.
+	Path string `json:"path"`
+	// RunAs is the account or group the task runs as.
+	RunAs             string   `json:"run_as"`
+	Triggers          []string `json:"triggers"`
+	HighestPrivileges bool     `json:"highest_privileges"`
+}
+
+// AdminReason explains why a non-elevated process may not change e.
+func (e Entry) AdminReason() string {
+	if e.Task != nil {
+		return ReasonTaskNeedsAdmin
+	}
+	return ReasonNeedsAdmin
 }
 
 // Broken reports whether the program an entry starts is missing. RunOnce
@@ -233,6 +266,10 @@ type Raw struct {
 	LinkErr error
 	// Approval is the StartupApproved value, nil when there is none.
 	Approval []byte
+	// Task is the scheduled task (task sources); TaskOwned reports whether
+	// it is the current user's own task (tasks.Task.OwnedBy).
+	Task      *tasks.Task
+	TaskOwned bool
 }
 
 // Resolver finds the program a command starts and whether it exists.
@@ -341,6 +378,10 @@ func (r Resolver) hosted(exe string, args []string) (string, system.Presence, st
 func Build(raws []Raw, r Resolver) []Entry {
 	out := make([]Entry, 0, len(raws))
 	for _, raw := range raws {
+		if raw.Source.Task() && raw.Task != nil {
+			out = append(out, buildTask(raw, r))
+			continue
+		}
 		info := sources[raw.Source]
 		e := Entry{
 			ID:          ID(raw.Source, raw.Name),
@@ -418,6 +459,121 @@ func Build(raws []Raw, r Resolver) []Entry {
 	return out
 }
 
+// buildTask interprets a scheduled task. It is the user's own entry only for
+// a sign-in task the user owns (see tasks.Task.OwnedBy); boot tasks and tasks
+// of other accounts, groups or with the highest privileges are machine-wide.
+func buildTask(raw Raw, r Resolver) Entry {
+	t := raw.Task
+	owned := raw.Source == SourceTaskLogon && raw.TaskOwned
+	e := Entry{
+		ID:          ID(raw.Source, raw.Name),
+		Name:        raw.Name,
+		Source:      raw.Source,
+		SourceLabel: sources[raw.Source].label,
+		Scope:       "machine",
+		Location:    t.Path,
+		State:       Enabled,
+		Toggleable:  true,
+		NeedsAdmin:  true,
+		Task:        &TaskInfo{Path: t.Path, RunAs: runAs(*t), Triggers: []string{}, HighestPrivileges: t.HighestPrivileges},
+	}
+	if owned {
+		e.Scope, e.NeedsAdmin = "user", false
+	}
+	if !t.Enabled {
+		e.State = Disabled
+	}
+	for _, tr := range t.Triggers {
+		e.Task.Triggers = append(e.Task.Triggers, string(tr))
+	}
+	if len(t.Actions) == 0 {
+		e.TargetState, e.TargetNote = system.Unknown, "the task does not start a program file (COM handler or message)"
+		return e
+	}
+	a := t.Actions[0]
+	e.Command = a.CommandLine()
+	if !raw.TaskOwned && perUserVariable(a.Command+" "+a.Arguments) {
+		// Expanded for another account, %LOCALAPPDATA% and the like name a
+		// different folder: never call such a program missing.
+		e.Target, e.TargetState, e.TargetNote = a.Command, system.Unknown, "depends on the account the task runs as (not checked)"
+		return e
+	}
+	e.Target, e.TargetState, e.TargetNote = r.CommandTarget(e.Command)
+	return e
+}
+
+var perUserVariables = []string{"%localappdata%", "%appdata%", "%userprofile%", "%temp%", "%tmp%",
+	"%homepath%", "%homedrive%", "%username%", "%onedrive%"}
+
+func perUserVariable(s string) bool {
+	s = strings.ToLower(s)
+	for _, v := range perUserVariables {
+		if strings.Contains(s, v) {
+			return true
+		}
+	}
+	return false
+}
+
+// runAs names the account or group a task runs as.
+func runAs(t tasks.Task) string {
+	id := t.UserID
+	if id == "" {
+		id = t.GroupID
+	}
+	switch strings.ToUpper(id) {
+	case "S-1-5-18":
+		return "SYSTEM"
+	case "S-1-5-19":
+		return "LOCAL SERVICE"
+	case "S-1-5-20":
+		return "NETWORK SERVICE"
+	}
+	return id
+}
+
+// TaskRaws lists the scheduled tasks of s that start at sign-in or at
+// startup as raw entries. Windows' own tasks (the \Microsoft\ folder of the
+// library) are left out: they are part of Windows, not programs the user or an
+// app added. Reading never changes anything; failures become warnings.
+func TaskRaws(ctx context.Context, s tasks.Store) ([]Raw, []string) {
+	list, warnings, err := s.List(ctx)
+	if err != nil {
+		return nil, []string{"could not read scheduled tasks: " + err.Error()}
+	}
+	acct := s.Account()
+	var out []Raw
+	for i := range list {
+		t := list[i]
+		if t.Windows() {
+			continue
+		}
+		src := SourceTaskLogon
+		switch {
+		case t.Has(tasks.TriggerLogon):
+		case t.Has(tasks.TriggerBoot):
+			src = SourceTaskBoot
+		default:
+			continue
+		}
+		out = append(out, Raw{Source: src, Name: strings.TrimPrefix(t.Path, `\`), Task: &t, TaskOwned: t.OwnedBy(acct)})
+	}
+	return out, warnings
+}
+
+// TaskWriteError puts a task store error in this package's terms.
+func TaskWriteError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, tasks.ErrNotFound):
+		return ErrEntryGone
+	case errors.Is(err, tasks.ErrAccessDenied):
+		return fmt.Errorf("%w; run %s from an elevated terminal", err, buildinfo.Name)
+	}
+	return err
+}
+
 func quoteIfSpaced(p string) string {
 	if strings.ContainsAny(p, " \t") && !strings.HasPrefix(p, `"`) {
 		return `"` + p + `"`
@@ -453,7 +609,8 @@ func Find(entries []Entry, query string) []Entry {
 	return partial
 }
 
-// Store reads startup entries and writes their StartupApproved values.
+// Store reads startup entries and writes their StartupApproved values or,
+// for scheduled tasks, their Enabled flag.
 type Store interface {
 	// List returns every entry. It changes nothing. Warnings describe
 	// sources that could not be read.
@@ -461,6 +618,10 @@ type Store interface {
 	// SetApproval writes the StartupApproved value for e, after checking that
 	// the entry still exists. It never changes the entry itself.
 	SetApproval(e Entry, data []byte) error
+	// SetTaskEnabled switches the Enabled flag of the scheduled task behind
+	// e (e.Task != nil) after checking that the task still exists. It never
+	// changes anything else about the task and never deletes it.
+	SetTaskEnabled(e Entry, enabled bool) error
 }
 
 // ErrEntryGone is returned when an entry disappeared after it was listed.
@@ -472,8 +633,12 @@ type Result struct {
 	Status string `json:"status"` // changed, unchanged, skipped, failed
 	Reason string `json:"reason,omitempty"`
 	// Before and After are the approval values (hex) around the change.
+	// Scheduled tasks have none.
 	Before string `json:"before,omitempty"`
 	After  string `json:"after,omitempty"`
+	// TaskEnabledBefore is a scheduled task's Enabled flag before the
+	// change (task entries only).
+	TaskEnabledBefore *bool `json:"task_enabled_before,omitempty"`
 }
 
 // Result statuses.
@@ -487,6 +652,17 @@ const (
 
 // ReasonNeedsAdmin explains admin-only entries in a non-elevated process.
 const ReasonNeedsAdmin = "requires administrator: it starts for all users; run oow from an elevated terminal"
+
+// ReasonTaskNeedsAdmin explains scheduled tasks a non-elevated process may
+// not change.
+var ReasonTaskNeedsAdmin = "requires administrator: the task runs for all users, as another account or with the highest " +
+	"privileges; run " + buildinfo.Name + " from an elevated terminal"
+
+// IsAdminReason reports whether a result was skipped for lack of
+// administrator rights.
+func IsAdminReason(reason string) bool {
+	return reason == ReasonNeedsAdmin || reason == ReasonTaskNeedsAdmin
+}
 
 // Plan reports what SetEnabled would do for each target, without changing
 // anything (statuses planned, unchanged or skipped).
@@ -503,6 +679,10 @@ func plan1(e Entry, enabled, elevated bool) Result {
 	if e.Approval != nil {
 		r.Before = e.Approval.Data
 	}
+	if e.Task != nil {
+		before := e.State != Disabled
+		r.TaskEnabledBefore = &before
+	}
 	want := Disabled
 	if enabled {
 		want = Enabled
@@ -513,13 +693,14 @@ func plan1(e Entry, enabled, elevated bool) Result {
 	case e.State == want:
 		r.Status, r.Reason = StatusUnchanged, "already "+string(want)
 	case e.NeedsAdmin && !elevated:
-		r.Status, r.Reason = StatusSkipped, ReasonNeedsAdmin
+		r.Status, r.Reason = StatusSkipped, e.AdminReason()
 	}
 	return r
 }
 
 // SetEnabled enables or disables targets through their StartupApproved
-// values and verifies each change by listing the entries again.
+// values (scheduled tasks: their Enabled flag) and verifies each change by
+// listing the entries again.
 func SetEnabled(ctx context.Context, s Store, targets []Entry, enabled, elevated bool, now time.Time) []Result {
 	results := Plan(targets, enabled, elevated)
 	data := ApprovalData(enabled, now)
@@ -533,11 +714,19 @@ func SetEnabled(ctx context.Context, s Store, targets []Entry, enabled, elevated
 			r.Status, r.Reason = StatusSkipped, "cancelled"
 			continue
 		}
-		if err := s.SetApproval(r.Entry, data); err != nil {
-			r.Status, r.Reason = StatusFailed, err.Error()
-			continue
+		if r.Entry.Task != nil {
+			if err := s.SetTaskEnabled(r.Entry, enabled); err != nil {
+				r.Status, r.Reason = StatusFailed, err.Error()
+				continue
+			}
+			r.Status = StatusChanged
+		} else {
+			if err := s.SetApproval(r.Entry, data); err != nil {
+				r.Status, r.Reason = StatusFailed, err.Error()
+				continue
+			}
+			r.Status, r.After = StatusChanged, hex.EncodeToString(data)
 		}
-		r.Status, r.After = StatusChanged, hex.EncodeToString(data)
 		changed = true
 	}
 	if !changed {
@@ -593,14 +782,15 @@ func ReadFolder(src Source, dir string, ansi func([]byte) (string, bool), approv
 		path := filepath.Join(dir, de.Name())
 		raw := Raw{Source: src, Name: de.Name(), File: path, Approval: approval(de.Name())}
 		if strings.EqualFold(filepath.Ext(path), ".lnk") {
-			raw.Link, raw.LinkErr = readLink(path, ansi)
+			raw.Link, raw.LinkErr = ReadLink(path, ansi)
 		}
 		out = append(out, raw)
 	}
 	return out, nil
 }
 
-func readLink(path string, ansi func([]byte) (string, bool)) (*Link, error) {
+// ReadLink reads and parses the shortcut at path (at most 1 MiB; see ParseLink).
+func ReadLink(path string, ansi func([]byte) (string, bool)) (*Link, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
