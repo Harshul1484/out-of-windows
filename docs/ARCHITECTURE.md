@@ -61,7 +61,7 @@ Every change to the machine goes through one of these sinks; review them line by
 | App uninstall | `uninstall.Runner` (the app's own uninstaller) | — | `uninstall` |
 | StartupApproved values | `startup.SetEnabled` → `Store.SetApproval` (read back) | — | `startup`, `repair` |
 | User `Path` value | `envpath.Store.WriteUser` (compare-and-swap) | — | `repair`, `remove` |
-| Maintenance tasks | `optimize.Runner` (DNS API, owner cmdlets) | — | `optimize` |
+| Maintenance tasks | `optimize.Runner` (DNS API, owner cmdlets, DISM for the component store) | — | `optimize` |
 | Executable replacement | `selfupdate` (rename aside, never overwrite) | — | `update` |
 
 The suggested `cmd/<command>` layout is realised as `internal/cli/<command>.go`: Go's

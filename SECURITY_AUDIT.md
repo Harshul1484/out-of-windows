@@ -275,7 +275,8 @@ These commands delete no user files. What each one may change, and how:
   device reports no seek penalty and TRIM support (`IOCTL_STORAGE_QUERY_PROPERTY` on a handle opened
   with no access rights). PowerShell is started from System32 by full path, hidden, with fixed
   scripts (drive letters validated as `^[A-Z]:\\$`) and timeouts. The cache size is measured
-  read-only before and after (links not followed). The admin tasks are skipped without elevation.
+  read-only before and after (links not followed). The component store is cleaned only by DISM
+  (next section). The admin tasks are skipped without elevation.
   Pending restarts, update state and low disk space are shown for information only; `oow` never
   restarts Windows, resets networking, restarts Explorer, edits update settings or tweaks the
   registry.
@@ -293,6 +294,34 @@ These commands delete no user files. What each one may change, and how:
 - **Sandbox mode** replaces every one of these with simulations under `<sandbox>\registry`
   (startup values, PATH values, system facts, task state); the simulated Delivery Optimization
   cache is emptied through `filesystem.RemoveVerified`, confined to the cache folder and the fence.
+
+### Component store (DISM) and the Windows Update download cache
+
+- **Owner tool only, fixed command lines.** `optimize.component-store` starts
+  `%WINDIR%\System32\Dism.exe` by full path (`GetSystemDirectory`, never PATH or a shell), hidden,
+  with exactly `/Online /English /Cleanup-Image /AnalyzeComponentStore` (read-only) and, only when
+  that report says `Component Store Cleanup Recommended : Yes`, `/Online /English /Quiet
+  /NoRestart /Cleanup-Image /StartComponentCleanup`. `/ResetBase`, `/SPSuperseded`, `/Defer`,
+  `/RestoreHealth` and `/RevertPendingActions` are never used; `/NoRestart` keeps DISM from
+  restarting Windows under `/Quiet`. A 32-bit build refuses rather than run the WOW64 DISM.
+  `oow` itself deletes nothing in WinSxS.
+- **Fail closed.** Both DISM runs need administrator rights; without elevation DISM is not
+  started (the task is `needs-admin`). The report is parsed by English labels with strict
+  number and unit rules; a localized, cut-off or inconsistent report, an `Error:` line or a
+  non-zero exit makes the task `unavailable` with the cause. Nothing unknown is shown as zero
+  or treated as a recommendation.
+- **No interruption, bounded waits.** DISM runs in its own hidden console and process group, so
+  Ctrl+C in `oow`'s console never reaches it, and `oow` never terminates it. Waiting is limited
+  (analysis 30 minutes, cleanup 3 hours); at the limit `oow` stops waiting, reports a failure and
+  says DISM was left running. Ctrl+C during the cleanup is acknowledged, DISM is left to finish,
+  the outcome is recorded and no further task starts.
+- **Verification.** The store is analyzed again after the cleanup and the measured change in
+  DISM's Actual Size is reported and recorded in history as freed; restart-required (3010) and
+  pending-operations (`0x800f0806`) results are reported with their next step.
+- **Windows Update download cache: not supported.** No supported interface empties
+  `SoftwareDistribution\Download` without stopping the update services and deleting files
+  (Microsoft documents that only as last-resort troubleshooting), so `oow` neither stops
+  `wuauserv`/`bits` nor deletes anything under `SoftwareDistribution`. See `docs/SAFETY.md` §3e.
 
 ### Project artifacts (purge) and installer packages
 
@@ -460,6 +489,11 @@ protected together with their ancestors (deleting a parent would delete them).
 | Repair: preselection, backup before write, compare-and-swap, machine PATH untouched, cancellation | `internal/repair/repair_test.go` |
 | Doctor never reports unreadable facts as ok; thresholds | `internal/doctor/doctor_test.go` |
 | Optimize: admin tasks skipped without elevation, only ready tasks run, cancellation | `internal/optimize/optimize_test.go` |
+| DISM report parsing from fixtures (Microsoft's documented sample, a captured refusal, recommended, locale numbers, localized, cut off, pending operations, UTF-16, malformed values); never zero or "recommended" when unknown | `internal/optimize/dism_test.go`, `TestParseDISMSize` |
+| DISM command lines fixed, never `/ResetBase`, `/SPSuperseded` or `/Defer` | `internal/optimize` `TestDISMCommandLines` |
+| Component store task: needs-admin without elevation (DISM not started), runs only on DISM's recommendation, failure, restart, unmeasured result, Ctrl+C leaves DISM to finish and starts nothing after | `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreCancelLeavesDISMToFinish` |
+| Component store CLI: sandbox plan, run, history, unreadable report never runs | `internal/cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeComponentStoreText`, `TestOptimizeUnreadableDISMReportNeverRuns` |
+| Real DISM: analysis parses on CI (refusal 740 without elevation); cleanup on the VM with every DISM command line and `dism.log` checked for forbidden options | `TestRealSystemComponentStoreAnalysis`, `scripts/ci/e2e-real.ps1` (component store group) |
 | Write-access probe creates nothing | `internal/system/probe_test.go` `TestCanCreateInDoesNotWrite` |
 | Startup/doctor/optimize/repair CLI: dry run and doctor change nothing, exit 4 without `--yes`, `OOW_DRY_RUN`, history | `internal/cli/system6_test.go` |
 | Real StartupApproved write/read-back, `.lnk` parsing of Shell-made shortcuts, user PATH repair with backup (CI only) | `scripts/ci/e2e-real.ps1` (startup, doctor, optimize, repair group) |
@@ -501,8 +535,9 @@ developer's real system.
   layouts; when an app changes its layout the rule finds nothing (it never widens).
 - Vendor uninstallers are third-party programs: `oow` controls when they run and verifies the
   result, not what they do. Scheduled tasks are not yet used as claims.
-- Not implemented, each needing its own review: `optimize` tasks for the Windows Update
-  cache and the component store (DISM). Installer packages' Authenticode signatures are
+- The Windows Update download cache is not cleaned by design (no supported owner interface;
+  see `docs/SAFETY.md` §3e). DISM is a Windows component: `oow` controls its command line and
+  reads its report, not what it removes. Installer packages' Authenticode signatures are
   noted but not verified (detection relies on content, not on the signature).
 - Threat modelling of elevated uninstall flows (running vendor uninstallers) is pending.
 

@@ -388,25 +388,44 @@ Exit code 1 when an entry was skipped or failed, 4 without `--yes` when not inte
                 "what": "...", "why": "...", "effect": "...", "requires_admin": true },
       "status": "ready", "selected": true, "bytes_before": 5000000 },
     { "task": { "id": "optimize.ssd-retrim", "...": "..." }, "status": "ready", "selected": true,
-      "volumes": [ { "root": "C:\\", "file_system": "NTFS" } ] }
+      "volumes": [ { "root": "C:\\", "file_system": "NTFS" } ] },
+    { "task": { "id": "optimize.component-store", "...": "..." }, "status": "ready", "selected": true,
+      "bytes_before": 11692944097,
+      "component_store": { "actual_bytes": 11692944097, "explorer_bytes": 12047528837, "shared_bytes": 6603512627,
+                           "backups_bytes": 5089531576, "cache_bytes": 0, "reclaimable_packages": 3,
+                           "cleanup_recommended": true, "last_cleanup": "2024-03-18 09:58:02" } }
   ],
   "notes": [ { "id": "reboot.pending", "status": "warning", "summary": "...", "next_step": "..." } ],
   "results": [
     { "id": "optimize.delivery-optimization", "name": "...", "status": "done", "message": "...",
-      "bytes_before": 5000000, "bytes_after": 0, "freed_bytes": 5000000, "duration_ms": 900 }
+      "bytes_before": 5000000, "bytes_after": 0, "freed_bytes": 5000000, "duration_ms": 900 },
+    { "id": "optimize.component-store", "name": "...", "status": "done", "message": "...",
+      "bytes_before": 11692944097, "bytes_after": 8213335244, "freed_bytes": 3479608853,
+      "component_store": { "...": "the analysis after the cleanup" }, "duration_ms": 1260000 }
   ]
 }
 ```
 
-- Task IDs: `optimize.dns-flush`, `optimize.delivery-optimization`, `optimize.ssd-retrim`
-  (`--task` accepts them with or without the `optimize.` prefix).
+- Task IDs: `optimize.dns-flush`, `optimize.delivery-optimization`, `optimize.ssd-retrim`,
+  `optimize.component-store` (`--task` accepts them with or without the `optimize.` prefix).
 - `status`: `ready`, `needs-admin`, `not-applicable` (nothing to do), `unavailable` (this Windows
-  cannot run it); `reason` explains every status but `ready`. `bytes_before` is `-1` when the cache
-  cannot be measured (it is readable only by administrators).
+  cannot run it); `reason` explains every status but `ready`. `bytes_before` is the size of what
+  the task cleans: the Delivery Optimization cache, or the component store's actual size. It is
+  `-1` when it cannot be measured (both need administrator rights).
+- `component_store` (task `optimize.component-store`, elevated runs only) is DISM's
+  `/AnalyzeComponentStore` report: `actual_bytes` (hard links counted once), `explorer_bytes`
+  and `shared_bytes` (`-1` when DISM did not print them), `backups_bytes` ("Backups and Disabled
+  Features") plus `cache_bytes` ("Cache and Temporary Data") is the overhead a cleanup frees part
+  of, `reclaimable_packages`, `cleanup_recommended`, and `last_cleanup` as DISM printed it. It is
+  present only when the whole report could be read; otherwise the task is `unavailable` with the
+  reason. The task is `not-applicable` when `cleanup_recommended` is false.
 - `notes` are doctor checks shown for information only (`reboot.pending`, `windows-update`,
   `disk.free.*` when not ok); optimize never acts on them.
 - `results` appears after a real run; `status` is `done`, `partial`, `failed` or `cancelled`.
-  Exit code 1 when a task failed or was partial.
+  Exit code 1 when a task failed or was partial. For the component store, `bytes_after` and
+  `component_store` come from analyzing again after the cleanup (`bytes_after` is `-1` when that
+  was not possible, and nothing is claimed as freed), and `restart_required` is true when DISM
+  needs a restart to finish.
 
 ## `oow repair --json` — `oow.repair/v1`
 
