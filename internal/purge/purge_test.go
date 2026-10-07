@@ -44,6 +44,84 @@ func newWorld(t *testing.T) *world {
 
 func (w *world) repos(rel string) string { return filepath.Join(sandbox.ProjectsDir(w.root), rel) }
 
+// bin is the sandbox's simulated Recycle Bin.
+func (w *world) bin() filesystem.Recycler { return sandbox.Recycler{Root: w.root} }
+
+func (w *world) binEntries() int {
+	entries, _ := os.ReadDir(filepath.Join(sandbox.RecycleBinDir(w.root), "S-1-5-21-sandbox"))
+	return len(entries)
+}
+
+type noRecycleBin struct{}
+
+func (noRecycleBin) Recycle(string) error { return filesystem.ErrNoRecycleBin }
+
+func TestReviewArtifactsGoToTheRecycleBin(t *testing.T) {
+	w := newWorld(t)
+	res := w.find()
+	got := w.byPath(res)
+	review, ready := got[`handmade\dist`], got[`rustapp\target`]
+	if review == nil || review.Status != StatusReview || ready == nil || ready.Status != StatusReady {
+		t.Fatalf("fixtures: review %+v, ready %+v", review, ready)
+	}
+	binBefore := w.binEntries()
+	out := Remove(context.Background(), w.env, res, []*Artifact{review, ready}, w.bin(), nil)
+	if out.Errors != 0 || out.Removed != 1 || out.Recycled != 1 || out.RecycledBytes != review.Bytes {
+		t.Fatalf("outcome: removed %d, recycled %d (%d bytes), errors %d", out.Removed, out.Recycled, out.RecycledBytes, out.Errors)
+	}
+	if review.Result.Method != MethodRecycled || review.Result.RemovedFiles != 0 || review.Result.RecycledFiles != 1 {
+		t.Errorf("review result %+v", review.Result)
+	}
+	if ready.Result.Method != MethodDeleted || !ready.Result.Complete || ready.Result.RecycledFiles != 0 {
+		t.Errorf("ready result %+v", ready.Result)
+	}
+	for _, p := range []string{review.Path, ready.Path} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Errorf("%s still in place", p)
+		}
+	}
+	// The review folder is in the (simulated) Recycle Bin as one entry, with
+	// its file; the ready one was deleted, not recycled.
+	if w.binEntries() != binBefore+1 {
+		t.Fatalf("Recycle Bin entries %d, want %d", w.binEntries(), binBefore+1)
+	}
+	found := false
+	_ = filepath.WalkDir(sandbox.RecycleBinDir(w.root), func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.Name() == "index.html" {
+			found = true
+		}
+		if err == nil && d.Name() == "rustapp.exe" {
+			t.Errorf("deleted artifact found in the Recycle Bin: %s", p)
+		}
+		return nil
+	})
+	if !found {
+		t.Error("recycled dist content not found in the Recycle Bin")
+	}
+}
+
+func TestReviewArtifactWithoutRecycleBinIsKept(t *testing.T) {
+	w := newWorld(t)
+	res := w.find()
+	review := w.byPath(res)[`handmade\dist`]
+	if review == nil {
+		t.Fatal("fixture missing")
+	}
+	for _, r := range []filesystem.Recycler{noRecycleBin{}, nil} {
+		out := Remove(context.Background(), w.env, res, []*Artifact{review}, r, nil)
+		if out.Recycled != 0 || out.Removed != 0 || review.Result.Kept == "" || review.Result.Method != "" {
+			t.Errorf("recycler %T: outcome %+v result %+v", r, out, review.Result)
+		}
+		if _, err := os.Lstat(filepath.Join(review.Path, "index.html")); err != nil {
+			t.Fatalf("recycler %T: files removed without a Recycle Bin", r)
+		}
+	}
+	Remove(context.Background(), w.env, res, []*Artifact{review}, noRecycleBin{}, nil)
+	if review.Result.Kept != "the drive has no Recycle Bin" {
+		t.Errorf("kept reason %q", review.Result.Kept)
+	}
+}
+
 func (w *world) find() *Result {
 	w.t.Helper()
 	res := Find(context.Background(), w.env, Roots(w.env, nil, nil), nil)
@@ -162,7 +240,7 @@ func TestRemoveDeletesOnlySelected(t *testing.T) {
 			chosen = append(chosen, a)
 		}
 	}
-	out := Remove(context.Background(), w.env, res, chosen, nil)
+	out := Remove(context.Background(), w.env, res, chosen, w.bin(), nil)
 	if out.Errors != 0 || out.Cancelled || out.Removed != len(chosen) {
 		t.Fatalf("outcome: removed %d of %d, errors %d", out.Removed, len(chosen), out.Errors)
 	}
@@ -229,7 +307,7 @@ func TestGitFailureKeepsArtifacts(t *testing.T) {
 	}
 	// Even when chosen directly, deletion re-checks Git and keeps it.
 	a.Status = StatusReady
-	out := Remove(context.Background(), w.env, res, []*Artifact{a}, nil)
+	out := Remove(context.Background(), w.env, res, []*Artifact{a}, w.bin(), nil)
 	if out.Removed != 0 || a.Result.Kept == "" {
 		t.Fatalf("removed despite failing Git: %+v", a.Result)
 	}
@@ -266,7 +344,7 @@ func TestChangesAfterScanAreKept(t *testing.T) {
 		t.Fatalf("git add: %v %s", err, out)
 	}
 	docs := testutil.SnapshotDir(t, sandbox.DocumentsDir(w.root))
-	out := Remove(context.Background(), w.env, res, []*Artifact{target, venv, nm}, nil)
+	out := Remove(context.Background(), w.env, res, []*Artifact{target, venv, nm}, w.bin(), nil)
 	if out.Removed != 0 || out.RemovedFiles != 0 {
 		t.Fatalf("removed %d artifacts, %d files", out.Removed, out.RemovedFiles)
 	}
@@ -286,7 +364,7 @@ func TestChangesAfterScanAreKept(t *testing.T) {
 	if err := sandbox.MakeJunction(cmake.Path, sandbox.DocumentsDir(w.root)); err != nil {
 		t.Fatal(err)
 	}
-	Remove(context.Background(), w.env, res, []*Artifact{cmake}, nil)
+	Remove(context.Background(), w.env, res, []*Artifact{cmake}, w.bin(), nil)
 	if cmake.Result == nil || cmake.Result.Kept == "" || cmake.Result.RemovedFiles != 0 {
 		t.Errorf("junction artifact result %+v", cmake.Result)
 	}

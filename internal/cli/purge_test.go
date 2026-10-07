@@ -43,6 +43,7 @@ type purgeDoc struct {
 		Executed       bool  `json:"executed"`
 		Removed        int   `json:"removed"`
 		ReclaimedBytes int64 `json:"reclaimed_bytes"`
+		Recycled       int   `json:"recycled"`
 		Errors         int   `json:"errors"`
 	} `json:"summary"`
 }
@@ -121,8 +122,9 @@ func TestPurgeYesRemovesSelectedAndRecordsHistory(t *testing.T) {
 		t.Fatalf("code = %d\n%s", code, out)
 	}
 	d := decode[purgeDoc](t, out)
+	// --yes takes only preselected artifacts, which are deleted, never recycled.
 	if !d.Summary.Executed || d.Summary.Errors != 0 || d.Summary.Removed != d.Summary.Selected ||
-		d.Summary.ReclaimedBytes != d.Summary.SelectedBytes {
+		d.Summary.ReclaimedBytes != d.Summary.SelectedBytes || d.Summary.Recycled != 0 {
 		t.Errorf("summary = %+v", d.Summary)
 	}
 	for _, gone := range []string{`webapp\node_modules`, `rustapp\target`, `Api\bin`, `pyproj\.venv`, `pyproj\app\__pycache__`} {

@@ -27,10 +27,10 @@ compact TUI. It is not a general Windows control panel, package manager, registr
 - Follow **Discover → Explain → Confirm → Act → Verify** for every destructive action, and
   answer: what is removed, why it is safe, how much space, what happens afterwards, whether it
   can be undone, and what actually changed.
-- Prefer the Recycle Bin for user-chosen files (analyzer, installers, leftovers). Permanent
-  deletion is for regenerable caches, temporary data and rebuildable project artifacts (purge:
-  the Recycle Bin is impractically slow and quota-limited for `node_modules`-sized trees and
-  frees no space; see `docs/SAFETY.md` §3c).
+- Prefer the Recycle Bin for user-chosen files (analyzer, installers, leftovers, and purge
+  artifacts the user adds from review). Permanent deletion is for regenerable caches,
+  temporary data and the artifacts purge preselects: they are rebuildable by definition and
+  dependency trees are too large for the Recycle Bin (see `docs/SAFETY.md` §3c).
 - Keep `clean`, `uninstall`, `leftovers`, `purge` and `installer` focused on exact, known
   cleanup targets: temporary data, rebuildable caches, app leftovers with exact evidence,
   installer packages, and rebuildable build output.
@@ -278,10 +278,12 @@ These are interfaces users and scripts depend on. Changing them is a compatibili
   shown for review, never auto-selected. Never match on generic words or short names.
 - **Purge**: a purge target is never a project container; protect Git-tracked content,
   nested repositories and deployment keys; artifacts with activity in the last 7 days are
-  unselected by default; scan only configured roots. Artifacts are deleted permanently (they are
-  rebuildable; the Recycle Bin is too slow and quota-limited for such trees), per file through
-  `RemoveVerified` with `safety.PurposePurge` scoped to the artifact folder, after re-checking
-  Git and the folder right before deletion. If Git cannot answer, keep the folder.
+  unselected by default; scan only configured roots. Preselected artifacts are deleted
+  permanently (rebuildable by definition; dependency trees are too large for the Recycle Bin),
+  per file through `RemoveVerified` with `safety.PurposePurge` scoped to the artifact folder;
+  artifacts the user adds from review go to the Recycle Bin as a whole folder
+  (`RecycleVerified`, same purpose), and without a Recycle Bin they are kept, never deleted.
+  Both re-check Git and the folder right before acting. If Git cannot answer, keep the folder.
 - **Installers**: identify installer packages by type and evidence (signature, MSI/MSIX
   metadata, product names), never by extension alone; route deletion to the Recycle Bin.
 - **Long scans** need cancellation checkpoints in inner loops and bounded time; a timed-out or

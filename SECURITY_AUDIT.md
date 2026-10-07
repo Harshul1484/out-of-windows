@@ -209,12 +209,15 @@ timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
   or failing Git keeps every artifact inside a repository (fail closed). Recent activity (7 days)
   and dist/build/out without Git-ignore evidence are never preselected; `--yes` takes only the
   preselection.
-- **Permanent deletion, verified per file.** Purge does not use the Recycle Bin (rebuildable data;
-  the Shell path is impractically slow, quota-limited and verifies only the top folder). Each
-  artifact is re-verified (same folder by creation time, not a link, guard, fresh walk with no
-  new or changed files since the scan, Git again); then each file goes through `RemoveVerified`
-  and folders are removed deepest first, every final path checked with `PurposePurge` scoped to
-  the artifact: known artifact name, parent not a drive root or never-remove location, outside
+- **Preselected: permanent deletion, verified per file; added from review: Recycle Bin.**
+  Preselected artifacts (full evidence; the only ones `--yes` takes) are deleted permanently
+  (rebuildable data; the Shell path is impractically slow, quota-limited and verifies only the
+  top folder). Artifacts the user adds from review (weaker evidence or recent activity) are moved
+  whole to the Recycle Bin through `RecycleVerified`; without a Recycle Bin they are kept, never
+  deleted. Each artifact is first re-verified (same folder by creation time, not a link, guard,
+  fresh walk with no new or changed files since the scan, Git again); then each file goes through
+  `RemoveVerified` and folders are removed deepest first (or the folder is recycled), every final
+  path checked with `PurposePurge` scoped to the artifact: known artifact name, parent not a drive root or never-remove location, outside
   system trees, AppData and profile tool folders (dot folders, `scoop`, `go\pkg`, Conda), never
   inside `.git`, never a sensitive file type outside package internals, never whitelisted or
   protected. A parent swapped for a junction after the scan resolves outside the scope and is
@@ -344,6 +347,7 @@ protected together with their ancestors (deleting a parent would delete them).
 | End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin, uninstall of a registered app with leftovers) |
 | Purge guard purpose (scope, traversal, `.git`, sensitive files, AppData, tool folders, whitelist) | `internal/safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
 | Purge discovery and keep rules (tracked files, nested repos, links, keys, vendor, recent, ambiguous) | `internal/purge` `TestFindInSandbox`, `TestRemoveDeletesOnlySelected` |
+| Purge review artifacts go to the Recycle Bin (kept without one), preselected ones are deleted | `TestReviewArtifactsGoToTheRecycleBin`, `TestReviewArtifactWithoutRecycleBinIsKept` |
 | Purge fail closed (Git missing or failing), changes and junction swaps after the scan, sink refusal | `TestGitMissingKeepsRepositoryArtifacts`, `TestGitFailureKeepsArtifacts`, `TestChangesAfterScanAreKept`, `TestSinkRefusesPathsOutsideTheArtifact`, `TestGitPathspecsAreLiteral` |
 | Purge CLI (dry run zero-write, exit 4, JSON, history, folders, `OOW_DRY_RUN`) | `internal/cli/purge_test.go` |
 | Installers by content, never by name; exact installed matching; Recycle Bin re-verification | `internal/installer/installer_test.go`, `internal/cli/installer_test.go` |

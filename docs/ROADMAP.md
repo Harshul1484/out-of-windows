@@ -86,7 +86,8 @@ before the next begins.
       project's marker file, in configured or usual project folders
 - [x] Purge safety: Git-tracked content (literal pathspecs, fail closed without Git), nested
       repositories, links, cloud-only and sensitive files kept; recent activity and ambiguous
-      folders unselected; permanent, per-file verified deletion under a dedicated guard purpose
+      folders unselected; preselected artifacts deleted permanently file by file under a
+      dedicated guard purpose, artifacts added from review moved to the Recycle Bin
 - [x] `oow purge --paths`, `oow config purge add|remove`
 - [x] `oow installer`: MSI/MSP, MSIX/APPX, setup programs (Inno Setup, NSIS, WiX Burn,
       InstallShield, version resources), ZIP and ISO identified by content in Downloads, Desktop

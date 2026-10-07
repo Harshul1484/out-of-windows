@@ -19,31 +19,43 @@ type ReasonCount struct {
 	Count  int    `json:"count"`
 }
 
+// How an artifact was removed.
+const (
+	MethodDeleted  = "deleted"  // permanently, file by file (preselected artifacts)
+	MethodRecycled = "recycled" // as a whole folder to the Recycle Bin (added from review)
+)
+
 // ArtifactResult is what happened to one artifact.
 type ArtifactResult struct {
 	// Kept explains why the whole folder was left alone at deletion time.
-	Kept         string        `json:"kept,omitempty"`
-	RemovedFiles int           `json:"removed_files"`
-	RemovedDirs  int           `json:"removed_dirs"`
-	Reclaimed    int64         `json:"reclaimed_bytes"`
-	Complete     bool          `json:"complete"`
-	Skipped      int           `json:"skipped"`
-	SkipReasons  []ReasonCount `json:"skip_reasons"`
-	Errors       int           `json:"errors"`
+	Kept string `json:"kept,omitempty"`
+	// Method is MethodDeleted or MethodRecycled ("" when kept).
+	Method        string        `json:"method,omitempty"`
+	RemovedFiles  int           `json:"removed_files"`
+	RemovedDirs   int           `json:"removed_dirs"`
+	Reclaimed     int64         `json:"reclaimed_bytes"`
+	RecycledFiles int           `json:"recycled_files"`
+	RecycledBytes int64         `json:"recycled_bytes"`
+	Complete      bool          `json:"complete"`
+	Skipped       int           `json:"skipped"`
+	SkipReasons   []ReasonCount `json:"skip_reasons"`
+	Errors        int           `json:"errors"`
 }
 
 // Outcome is the result of Remove.
 type Outcome struct {
-	Artifacts    []*Artifact
-	Removed      int // artifacts removed completely
-	RemovedFiles int
-	Reclaimed    int64
-	Skipped      int // files and folders left in place
-	Errors       int
-	Cancelled    bool
-	Duration     time.Duration
-	FreeBefore   map[string]uint64
-	FreeAfter    map[string]uint64
+	Artifacts     []*Artifact
+	Removed       int // artifacts deleted completely
+	RemovedFiles  int
+	Reclaimed     int64
+	Recycled      int // artifacts moved to the Recycle Bin
+	RecycledBytes int64
+	Skipped       int // files and folders left in place
+	Errors        int
+	Cancelled     bool
+	Duration      time.Duration
+	FreeBefore    map[string]uint64
+	FreeAfter     map[string]uint64
 }
 
 // FreedOnDisk is the measured increase in free space on the volumes
@@ -71,15 +83,20 @@ const (
 	reasonNotEmpty = "folder not empty"
 )
 
-// Remove deletes the chosen artifacts permanently. Each artifact is checked
-// again first: it must be the folder that was scanned, the guard must accept
-// it, a fresh walk must find no Git repository, link, cloud-only or
-// sensitive file and nothing changed since the scan, and Git must still
-// report no tracked files. Then every file is deleted through
-// filesystem.RemoveVerified (identity, link and final-path checks through
-// the deleting handle, the guard with the artifact as scope), and folders
-// deepest first. Ctrl+C stops after the items in progress.
-func Remove(ctx context.Context, env *Env, res *Result, chosen []*Artifact, prog *Progress) *Outcome {
+// Remove removes the chosen artifacts. Each artifact is checked again first:
+// it must be the folder that was scanned, the guard must accept it, a fresh
+// walk must find no Git repository, link, cloud-only or sensitive file and
+// nothing changed since the scan, and Git must still report no tracked files.
+//
+// Preselected artifacts (StatusReady: full evidence) are then deleted
+// permanently: every file through filesystem.RemoveVerified (identity, link
+// and final-path checks through the deleting handle, the guard with the
+// artifact as scope), and folders deepest first. Artifacts the user added
+// from review (StatusReview: weaker evidence or recent activity) are moved
+// to the Recycle Bin as a whole folder through filesystem.RecycleVerified
+// with r; without a Recycle Bin they are kept, never deleted. Ctrl+C stops
+// after the items in progress.
+func Remove(ctx context.Context, env *Env, res *Result, chosen []*Artifact, r filesystem.Recycler, prog *Progress) *Outcome {
 	start := time.Now()
 	out := &Outcome{FreeBefore: map[string]uint64{}, FreeAfter: map[string]uint64{}}
 	volumes := map[string]bool{}
@@ -104,16 +121,20 @@ func Remove(ctx context.Context, env *Env, res *Result, chosen []*Artifact, prog
 		if prog != nil {
 			prog.set(a.Path)
 		}
-		r := removeOne(ctx, env, res.Started, a, prog)
-		a.Result = r
+		ar := removeOne(ctx, env, res.Started, a, r, prog)
+		a.Result = ar
 		out.Artifacts = append(out.Artifacts, a)
-		if r.Complete {
+		switch {
+		case ar.Method == MethodRecycled:
+			out.Recycled++
+			out.RecycledBytes += ar.RecycledBytes
+		case ar.Complete:
 			out.Removed++
 		}
-		out.RemovedFiles += r.RemovedFiles
-		out.Reclaimed += r.Reclaimed
-		out.Skipped += r.Skipped
-		out.Errors += r.Errors
+		out.RemovedFiles += ar.RemovedFiles
+		out.Reclaimed += ar.Reclaimed
+		out.Skipped += ar.Skipped
+		out.Errors += ar.Errors
 		if ctx.Err() != nil {
 			out.Cancelled = true
 			break
@@ -128,7 +149,7 @@ func Remove(ctx context.Context, env *Env, res *Result, chosen []*Artifact, prog
 	return out
 }
 
-func removeOne(ctx context.Context, env *Env, scanned time.Time, a *Artifact, prog *Progress) *ArtifactResult {
+func removeOne(ctx context.Context, env *Env, scanned time.Time, a *Artifact, recycler filesystem.Recycler, prog *Progress) *ArtifactResult {
 	r := &ArtifactResult{SkipReasons: []ReasonCount{}}
 	keep := func(why string) *ArtifactResult {
 		r.Kept = why
@@ -173,6 +194,33 @@ func removeOne(ctx context.Context, env *Env, scanned time.Time, a *Artifact, pr
 			return keep("contains files tracked by Git")
 		}
 	}
+
+	// Added from review: the whole folder goes to the Recycle Bin, or stays.
+	if a.Status != StatusReady {
+		if recycler == nil {
+			return keep("no Recycle Bin is available")
+		}
+		err := filesystem.RecycleVerified(a.Path, e.Fingerprint, purgeCheck(env.Guard, a.Path, true), recycler)
+		switch {
+		case err == nil:
+			r.Method, r.Complete = MethodRecycled, true
+			r.RecycledFiles, r.RecycledBytes = m.files, m.bytes
+			if prog != nil {
+				prog.Files.Add(int64(m.files))
+				prog.Bytes.Add(m.bytes)
+			}
+			return r
+		case errors.Is(err, filesystem.ErrNoRecycleBin):
+			return keep("the drive has no Recycle Bin")
+		}
+		reason, isErr := classify(err)
+		if isErr {
+			r.Errors++
+			slog.Error("purge: moving to the Recycle Bin failed", "path", a.Path, "err", err)
+		}
+		return keep(reason)
+	}
+	r.Method = MethodDeleted
 
 	var files, dirs []filesystem.Entry
 	for _, x := range m.entries {

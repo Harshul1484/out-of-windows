@@ -265,7 +265,8 @@ largest first, filtered by `--min-size`, at most `--top` entries.
           "label": "installed npm packages", "ecosystem": "Node.js", "bytes": 412000000, "files": 38201,
           "newest_change": "2026-08-20T10:00:00Z", "status": "ready", "selected": true, "reasons": [],
           "rebuild": "npm install (or yarn / pnpm install)",
-          "result": { "removed_files": 38201, "removed_dirs": 4100, "reclaimed_bytes": 412000000,
+          "result": { "method": "deleted", "removed_files": 38201, "removed_dirs": 4100,
+                      "reclaimed_bytes": 412000000, "recycled_files": 0, "recycled_bytes": 0,
                       "complete": true, "skipped": 0, "skip_reasons": [], "errors": 0 }
         },
         {
@@ -280,8 +281,9 @@ largest first, filtered by `--min-size`, at most `--top` entries.
   "summary": {
     "projects": 14, "artifacts": 15, "reclaimable_bytes": 2100000000, "selected": 13,
     "selected_bytes": 2000000000, "kept": 4, "scan_errors": 0, "executed": false, "removed": 0,
-    "removed_files": 0, "reclaimed_bytes": 0, "freed_on_disk_bytes": 0, "skipped": 0, "errors": 0,
-    "cancelled": false, "scan_ms": 2100, "purge_ms": 0
+    "removed_files": 0, "reclaimed_bytes": 0, "recycled": 0, "recycled_bytes": 0,
+    "freed_on_disk_bytes": 0, "skipped": 0, "errors": 0, "cancelled": false, "scan_ms": 2100,
+    "purge_ms": 0
   }
 }
 ```
@@ -299,9 +301,15 @@ largest first, filtered by `--min-size`, at most `--top` entries.
 - `repository` is the folder holding `.git`, absent when the project is not in one.
 - `summary.artifacts` and `reclaimable_bytes` count `ready` and `review` artifacts.
 - `result` appears only for artifacts that a real run handled; `kept` in it names why the whole
-  folder was left alone at deletion time. `summary.removed` counts artifacts removed completely.
-- Without a terminal, `--yes` deletes exactly the artifacts with `selected: true`.
-- History records use `"command": "purge"` with one target per artifact (`id` is its path).
+  folder was left alone at deletion time. `method` is `deleted` (preselected artifacts, deleted
+  permanently file by file) or `recycled` (artifacts added from review, moved whole to the
+  Recycle Bin; `recycled_files`/`recycled_bytes`), absent when kept.
+- `summary.removed` counts artifacts deleted completely, `summary.recycled` those moved to the
+  Recycle Bin (`recycled_bytes`); `reclaimed_bytes` counts only deleted bytes.
+- Without a terminal, `--yes` deletes exactly the artifacts with `selected: true`; review
+  artifacts can only be added interactively.
+- History records use `"command": "purge"` with one target per artifact (`id` is its path);
+  `recycled_bytes` holds what was moved to the Recycle Bin.
 
 ## `oow purge --paths --json` / `oow config purge --json` — `oow.purge-paths/v1`
 

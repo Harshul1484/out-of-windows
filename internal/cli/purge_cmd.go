@@ -30,8 +30,9 @@ func newPurgeCmd(app *App) *cobra.Command {
 		GroupID: "clean",
 		Long: "Find dependency folders, build output and tool caches in your projects (node_modules,\n" +
 			".next, target, build, bin/obj, .venv, __pycache__, .dart_tool, CMake build trees, ...) and\n" +
-			"delete the ones you confirm. They are rebuilt by npm install, cargo build, dotnet build and\n" +
-			"similar commands, so they are deleted permanently rather than moved to the Recycle Bin.\n\n" +
+			"remove the ones you confirm. Folders selected by default are rebuilt by npm install, cargo\n" +
+			"build, dotnet build and similar commands, so they are deleted permanently; folders you add\n" +
+			"from review are moved to the Recycle Bin instead.\n\n" +
 			"Only folders next to their project's marker file count (node_modules next to package.json).\n" +
 			"Folders with Git-tracked files, a nested repository, links, keys or certificates are kept;\n" +
 			"folders changed in the last 7 days are listed but not selected. Scans the folders you pass,\n" +
@@ -78,6 +79,8 @@ type purgeSummaryJSON struct {
 	Removed          int   `json:"removed"`
 	RemovedFiles     int   `json:"removed_files"`
 	ReclaimedBytes   int64 `json:"reclaimed_bytes"`
+	Recycled         int   `json:"recycled"`
+	RecycledBytes    int64 `json:"recycled_bytes"`
 	FreedOnDiskBytes int64 `json:"freed_on_disk_bytes"`
 	Skipped          int   `json:"skipped"`
 	Errors           int   `json:"errors"`
@@ -127,6 +130,7 @@ func purgeDoc(app *App, res *purge.Result, dryRun bool, out *purge.Outcome) purg
 		doc.Summary.Executed = true
 		doc.Summary.Removed, doc.Summary.RemovedFiles = out.Removed, out.RemovedFiles
 		doc.Summary.ReclaimedBytes, doc.Summary.FreedOnDiskBytes = out.Reclaimed, out.FreedOnDisk()
+		doc.Summary.Recycled, doc.Summary.RecycledBytes = out.Recycled, out.RecycledBytes
 		doc.Summary.Skipped, doc.Summary.Errors = out.Skipped, out.Errors
 		doc.Summary.Cancelled, doc.Summary.PurgeMS = out.Cancelled, out.Duration.Milliseconds()
 	}
@@ -225,20 +229,33 @@ func runPurge(ctx context.Context, app *App, o purgeOptions, args []string) erro
 
 	// Confirm.
 	if !o.yes {
-		var bytes int64
+		var delBytes, binBytes int64
+		var del, bin int
 		rebuild := map[string]bool{}
 		var how []string
 		for _, a := range chosen {
-			bytes += a.Bytes
+			if a.Status == purge.StatusReady {
+				del++
+				delBytes += a.Bytes
+			} else {
+				bin++
+				binBytes += a.Bytes
+			}
 			if !rebuild[a.Rebuild] {
 				rebuild[a.Rebuild] = true
 				how = append(how, a.Rebuild)
 			}
 		}
 		app.println()
-		app.printf(" You are about to permanently delete %s %s.\n",
-			ui.Bold.Render(ui.Plural(len(chosen), "folder", "folders")), ui.Bold.Render("("+ui.Bytes(bytes)+")"))
-		app.printf(" %s\n", ui.Muted.Render("They are not moved to the Recycle Bin. Rebuild them when you need them:"))
+		if del > 0 {
+			app.printf(" You are about to permanently delete %s %s.\n",
+				ui.Bold.Render(ui.Plural(del, "folder", "folders")), ui.Bold.Render("("+ui.Bytes(delBytes)+")"))
+		}
+		if bin > 0 {
+			app.printf(" %s %s you added from review will be moved to the Recycle Bin, so they can be restored.\n",
+				ui.Bold.Render(ui.Plural(bin, "folder", "folders")), ui.Bold.Render("("+ui.Bytes(binBytes)+")"))
+		}
+		app.printf(" %s\n", ui.Muted.Render("Rebuild them when you need them:"))
 		for i, h := range how {
 			if i == 4 {
 				app.printf("   %s\n", ui.Muted.Render(fmt.Sprintf("… and %d more", len(how)-4)))
@@ -262,7 +279,7 @@ func runPurge(ctx context.Context, app *App, o purgeOptions, args []string) erro
 	spin = ui.StartSpinner(app.Err, app.tty(), func() string {
 		return fmt.Sprintf("Deleting %s %s %s removed", ui.TruncateMiddle(prog.Current(), 50), ui.SymDot, ui.Bytes(prog.Bytes.Load()))
 	})
-	out := purge.Remove(ctx, env, res, chosen, &prog)
+	out := purge.Remove(ctx, env, res, chosen, app.recycler(), &prog)
 	spin.Stop()
 	recordPurge(app, out)
 
@@ -293,7 +310,11 @@ func choosePurge(res *purge.Result) ([]*purge.Artifact, bool, error) {
 				refs = append(refs, nil)
 				header = true
 			}
-			detail := []string{"What   " + a.Label + " (" + a.Ecosystem + ")", "Back   " + a.Rebuild}
+			how := "How    deleted permanently"
+			if a.Status != purge.StatusReady {
+				how = "How    moved to the Recycle Bin (added from review)"
+			}
+			detail := []string{"What   " + a.Label + " (" + a.Ecosystem + ")", "Back   " + a.Rebuild, how}
 			if len(a.Reasons) > 0 {
 				detail = append(detail, "Note   "+strings.Join(a.Reasons, "; "))
 			}
@@ -307,7 +328,8 @@ func choosePurge(res *purge.Result) ([]*purge.Artifact, bool, error) {
 			refs = append(refs, a)
 		}
 	}
-	r, err := ui.RunChecklist(ui.ChecklistOptions{Title: "Select folders to delete permanently", ConfirmVerb: "continue", ShowWeight: true}, items)
+	r, err := ui.RunChecklist(ui.ChecklistOptions{Title: "Select folders to remove (preselected ones are deleted, others recycled)",
+		ConfirmVerb: "continue", ShowWeight: true}, items)
 	if err != nil || !r.Confirmed {
 		return nil, false, err
 	}
@@ -412,6 +434,9 @@ func printPurgeOutcome(app *App, out *purge.Outcome) {
 		switch {
 		case r.Kept != "":
 			app.printf("   %s %s %s\n", ui.Muted.Render(ui.SymSkip), ui.TruncateMiddle(a.Path, width-40), ui.Muted.Render("kept: "+r.Kept))
+		case r.Method == purge.MethodRecycled:
+			app.printf("   %s %s %s %s\n", ui.OK.Render(ui.SymOK), ui.TruncateMiddle(a.Path, width-40), ui.Bold.Render(ui.Bytes(r.RecycledBytes)),
+				ui.Muted.Render("moved to the Recycle Bin"))
 		case r.Complete:
 			app.printf("   %s %s %s\n", ui.OK.Render(ui.SymOK), ui.TruncateMiddle(a.Path, width-20), ui.Bold.Render(ui.Bytes(r.Reclaimed)))
 		default:
@@ -436,13 +461,17 @@ func printPurgeOutcome(app *App, out *purge.Outcome) {
 		title = "Purge stopped"
 	}
 	app.printf(" %s\n\n", ui.Title.Render(title))
-	app.printf(" %s %s, %s\n", ui.PadRight("Removed", 11), ui.Plural(out.Removed, "folder", "folders"),
+	app.printf(" %s %s, %s\n", ui.PadRight("Deleted", 11), ui.Plural(out.Removed, "folder", "folders"),
 		ui.Plural(out.RemovedFiles, "file", "files"))
 	freed := ""
 	if d := out.FreedOnDisk(); d > 0 {
 		freed = ui.Muted.Render("   free space +" + ui.Bytes(d))
 	}
 	app.printf(" %s %s%s\n", ui.PadRight("Reclaimed", 11), ui.Bold.Render(ui.Bytes(out.Reclaimed)), freed)
+	if out.Recycled > 0 {
+		app.printf(" %s %s %s\n", ui.PadRight("Recycled", 11), ui.Plural(out.Recycled, "folder", "folders"),
+			ui.Muted.Render("("+ui.Bytes(out.RecycledBytes)+" moved to the Recycle Bin; restore from there if needed)"))
+	}
 	app.printf(" %s %s\n", ui.PadRight("Skipped", 11), ui.Plural(out.Skipped, "item", "items"))
 	errs := ui.Count(out.Errors)
 	if out.Errors > 0 {
@@ -453,11 +482,15 @@ func printPurgeOutcome(app *App, out *purge.Outcome) {
 
 func recordPurge(app *App, out *purge.Outcome) {
 	rec := history.Record{Time: time.Now(), Command: "purge", Sandbox: app.Sandbox != "", Reclaimed: out.Reclaimed,
-		Skipped: out.Skipped, Errors: out.Errors, Cancelled: out.Cancelled, DurationMS: out.Duration.Milliseconds()}
+		Recycled: out.RecycledBytes, Skipped: out.Skipped, Errors: out.Errors, Cancelled: out.Cancelled,
+		DurationMS: out.Duration.Milliseconds()}
 	for _, a := range out.Artifacts {
 		r := a.Result
 		t := history.TargetStat{ID: a.Path, Name: a.Label, Removed: r.RemovedFiles + r.RemovedDirs,
 			Reclaimed: r.Reclaimed, Skipped: r.Skipped, Errors: r.Errors}
+		if r.Method == purge.MethodRecycled {
+			t.Removed = 1 // the folder, moved whole to the Recycle Bin
+		}
 		if r.Kept != "" {
 			t.Skipped++
 			t.SkipReasons = append(t.SkipReasons, history.ReasonCount{Reason: r.Kept, Count: 1})

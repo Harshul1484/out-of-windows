@@ -155,18 +155,28 @@ for more projects. Go `vendor` and other directly consumed stores are never targ
 `build` and `out` of JavaScript projects unless Git ignores them; `bin`/`obj` without MSBuild's
 layout. `--yes` takes only the default selection.
 
-**Deletion method: permanent, through the verified sink.** Purge deletes artifacts permanently
-instead of moving them to the Recycle Bin. Reasons: the folders are rebuilt by the project's
+**Removal method: preselected artifacts are deleted, artifacts added from review are
+recycled.** Artifacts with full evidence (`ready`, preselected; the only ones `--yes` takes) are
+deleted permanently through the verified sink. Artifacts the user adds from review (`review`:
+dist/build/out without Git-ignore evidence, recent activity, unusual layout) rest on weaker
+evidence, so they are moved to the Recycle Bin as a whole folder with
+`filesystem.RecycleVerified` (handle-verified identity, link and fence checks, final path
+approved by `PurposePurge` with the artifact as scope) after the same re-checks; on a drive
+without a Recycle Bin such a folder is kept with that reason, never deleted.
+
+Why preselected artifacts are not recycled: the folders are rebuilt by the project's
 own commands (the same recovery contract as caches); the Shell's Recycle Bin path is
 impractically slow for folders of 100,000+ small files and such folders often exceed the bin's
 size quota (the Shell then offers to delete permanently anyway); a recycled `node_modules`
-would not free any space; and the Recycle Bin path verifies only the top folder before handing the whole tree to the
-Shell, whereas the verified sink checks every file. For each chosen artifact `purge.Remove`
-first re-checks: same folder (not a link, same creation time), guard approval, a fresh walk that
-finds no `.git`, link, cloud-only or sensitive file and nothing created or modified since the
-scan, and Git again. Then every file is deleted with `filesystem.RemoveVerified` (identity,
-link, cloud and fence checks through the deleting handle) and folders deepest first, each
-checked with **`PurposePurge`**: the scope must be the artifact folder, whose name must be a
+would not free any space; and the Recycle Bin path verifies only the top folder before handing
+the whole tree to the Shell, whereas the verified sink checks every file.
+
+For each chosen artifact `purge.Remove` first re-checks: same folder (not a link, same creation
+time), guard approval, a fresh walk that finds no `.git`, link, cloud-only or sensitive file and
+nothing created or modified since the scan, and Git again. A preselected artifact is then
+deleted file by file with `filesystem.RemoveVerified` (identity, link, cloud and fence checks
+through the deleting handle) and folders deepest first; an artifact added from review is moved
+whole with `filesystem.RecycleVerified`. Every final path is checked with **`PurposePurge`**: the scope must be the artifact folder, whose name must be a
 known artifact name and whose parent must be a project folder (not a drive root, the profile or
 a user-content root), outside system trees, AppData and tool folders in the profile (`.vscode`,
 `.cargo`, `.nuget`, other dot folders, `scoop`, `go\pkg`, Conda). The path must lie inside that
@@ -234,10 +244,10 @@ test nor a sandbox run can delete anything outside its folder, whatever the code
 Interactive runs show the report, a checklist (with What/Why/After for the focused target)
 and a `[y/N]` confirmation that defaults to No. Non-interactive runs refuse to delete without
 `--yes` (exit code 4). `OOW_DRY_RUN=1` turns every destructive command into a preview,
-whatever flags are passed. Cache and temp cleanup and purged project artifacts are deleted
-permanently because the data is regenerated (see §3c for why purge does not use the Recycle
-Bin); user files (analyzer, installers, leftovers) go to the Recycle Bin, and permanent
-deletion of user files will require typing a confirmation word.
+whatever flags are passed. Cache and temp cleanup and preselected project artifacts are deleted
+permanently because the data is regenerated (see §3c for why); user files (analyzer,
+installers, leftovers) and project artifacts the user adds from review go to the Recycle Bin,
+and permanent deletion of user files will require typing a confirmation word.
 
 Every real run is appended to `history.jsonl` with per-target counts and skip reasons. Reports
 show bytes removed and the *measured* change in free space.
@@ -258,6 +268,6 @@ show bytes removed and the *measured* change in free space.
 | Fence cannot be widened and blocks deletion | `TestFenceCannotBeWidened`, `TestFenceBlocksDeletionOutside` |
 | Real system paths and 8.3 names protected | `safety/realsystem_test.go` (CI) |
 | Purge purpose: scope, traversal, `.git`, sensitive files, AppData and tool folders | `safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
-| Purge discovery, keep rules, Git fail-closed, junction swaps, changes after scan | `purge/purge_test.go` |
+| Purge discovery, keep rules, Git fail-closed, junction swaps, changes after scan, review artifacts recycled (kept without a Recycle Bin) | `purge/purge_test.go` |
 | Installers identified by content, exact installed matching, Recycle Bin | `installer/installer_test.go` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |
