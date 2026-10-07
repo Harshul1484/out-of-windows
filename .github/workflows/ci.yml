@@ -53,6 +53,18 @@ jobs:
         run: *parse-ps
       - name: go vet
         run: go vet ./...
+      - name: Windows resources match winres/
+        shell: pwsh
+        run: |
+          # The committed .syso files must be exactly what go generate makes
+          # from cmd/oow/winres (go-winres output is deterministic).
+          go generate ./cmd/oow
+          if ($LASTEXITCODE -ne 0) { throw 'go generate ./cmd/oow failed' }
+          $changed = git status --porcelain -- cmd/oow
+          if ($changed) {
+            git status --short -- cmd/oow
+            throw 'cmd/oow/rsrc_windows_*.syso are stale: run `go generate ./cmd/oow` and commit the result'
+          }
       - name: go test
         run: go test -count=1 ./...
       - name: fuzz safety invariants
@@ -63,6 +75,12 @@ jobs:
           go test ./internal/startup -run '^$' -fuzz FuzzParseLink -fuzztime 30s
       - name: build
         run: go build -trimpath -o bin/oow.exe ./cmd/oow
+      - name: version information and manifest
+        shell: pwsh
+        run: |
+          # The resource version must be the version the binary reports.
+          $v = (./bin/oow.exe version --json | ConvertFrom-Json).version
+          ./scripts/ci/check-exe-metadata.ps1 -Exe bin/oow.exe -Version $v
       - uses: actions/upload-artifact@v7
         if: matrix.os == 'windows-2025'
         with:
