@@ -118,6 +118,22 @@ jobs:
             ./scripts/ci/check-exe-metadata.ps1 -Exe "dist/oow-$env:VERSION-windows-$arch.exe" -Version $env:VERSION
           }
 
+      - name: package manifests
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # winget, Scoop and Chocolatey files for this release, rendered from
+          # the zips just built, validated, and attached as one zip (checksummed
+          # and attested like every other file), so publishing them later is a
+          # copy step (packaging/README.md). Nothing is submitted to any package
+          # repository here.
+          $ErrorActionPreference = 'Stop'
+          ./packaging/render.ps1 -Version $env:VERSION -Dist dist -Out packages -Repo $env:REPO
+          ./packaging/validate.ps1 -Version $env:VERSION -Dist dist -Dir packages -Repo $env:REPO
+          Compress-Archive -Path packages/* -DestinationPath "dist/oow-$env:VERSION-package-manifests.zip"
+
       - name: checksums
         shell: pwsh
         run: |
@@ -179,6 +195,7 @@ jobs:
           \`\`\`
 
           Or download \`oow-${VERSION}-windows-amd64.zip\` (or \`arm64\`) below. Already installed? Run \`oow update\`.
+          (\`oow-${VERSION}-package-manifests.zip\` holds the winget, Scoop and Chocolatey files for package repositories; you do not need it to install.)
 
           ## Verify
 
