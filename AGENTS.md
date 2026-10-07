@@ -159,6 +159,10 @@ arrives.
   installer's PATH entry (removed through `envpath.Store`, the same compare-and-swap writer
   `repair` uses), and executable removal through the verified sink (`ExeRemover`; the running
   program is never deleted).
+- `assets/brand/`: logo masters (SVG), app icons, social preview, terminal rendering and the
+  usage guide. The mark and wordmark are pixel grids in `internal/ui/logo.go`; the CLI draws
+  them with half-block characters, and `TestLogoMatchesBrandAssets` keeps the two identical.
+  `cmd/oow/winres/` embeds the icon in `oow.exe` (`go generate ./cmd/oow` after changing it).
 - `internal/sandbox/`: simulated Windows layout and seed data for safe end-to-end runs.
 - `internal/testutil/`: test sandbox, deletion fence setup, fixtures, file locking.
 - `docs/SAFETY.md`: the safety model (design contract). `docs/ARCHITECTURE.md`,

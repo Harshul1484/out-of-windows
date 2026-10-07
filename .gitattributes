@@ -7,3 +7,4 @@ internal/optimize/testdata/dism/*.txt -text
 *.syso binary
 *.png binary
 *.gif binary
+*.ico binary

@@ -33,7 +33,7 @@ type MenuItem struct {
 
 // HomeOptions configure the home screen.
 type HomeOptions struct {
-	Product  string // e.g. "OUT OF WINDOWS"
+	Product  string // shown beside the logo, e.g. "out-of-windows 0.1.0"
 	OS       string // e.g. "Windows 11"
 	Banner   string // e.g. sandbox mode notice
 	Elevated bool
@@ -139,13 +139,28 @@ func (m *home) View() string {
 	inner := min(max(m.width-6, 44), 72)
 	var b strings.Builder
 
-	right := Muted.Render(m.opts.OS)
+	// The logo, with product, OS and elevation right-aligned beside the
+	// wordmark; on a terminal too narrow for both they go below it.
+	info := []string{m.opts.Product, Muted.Render(m.opts.OS)}
 	if m.opts.Elevated {
-		right = Warn.Render("admin") + Muted.Render(" "+SymDot+" ") + right
+		info = append(info, Warn.Render("admin"))
 	}
-	head := Title.Render(m.opts.Product)
-	gap := inner - lipgloss.Width(head) - lipgloss.Width(right)
-	b.WriteString(head + strings.Repeat(" ", max(1, gap)) + right + "\n")
+	logo := LogoLockup()
+	logoW, infoW := lipgloss.Width(logo[0]), 0
+	for _, s := range info {
+		infoW = max(infoW, lipgloss.Width(s))
+	}
+	if logoW+2+infoW <= inner {
+		for i, l := range logo {
+			r := ""
+			if i >= 1 && i-1 < len(info) {
+				r = info[i-1]
+			}
+			b.WriteString(l + strings.Repeat(" ", inner-logoW-lipgloss.Width(r)) + r + "\n")
+		}
+	} else {
+		b.WriteString(strings.Join(logo, "\n") + "\n" + strings.Join(info, "\n") + "\n")
+	}
 	if m.opts.Banner != "" {
 		b.WriteString(Warn.Render(m.opts.Banner) + "\n")
 	}

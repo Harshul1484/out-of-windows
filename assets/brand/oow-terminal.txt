@@ -1,0 +1,11 @@
+Terminal rendering (half blocks; one cell = one character wide, half a line tall)
+
+      ██
+█▀▀▀
+█    █
+█▄▄▄▄█
+
+      ██
+█▀▀▀       ▄▄▄   ▄▄▄  ▄   ▄
+█    █    █   █ █   █ █ ▄ █
+█▄▄▄▄█    ▀▄▄▄▀ ▀▄▄▄▀ ▀▄▀▄▀

@@ -265,5 +265,5 @@ func (a *App) systemClaims() []leftovers.ClaimPath {
 
 // productName is shown on the home screen.
 func productName() string {
-	return "OUT OF WINDOWS  " + ui.Muted.Render(buildinfo.Name+" "+buildinfo.Version)
+	return buildinfo.DisplayName + " " + ui.Muted.Render(buildinfo.Version)
 }

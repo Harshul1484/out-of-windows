@@ -266,3 +266,33 @@ func TestHomeViewShowsStats(t *testing.T) {
 		t.Error("ANSI escapes with color disabled")
 	}
 }
+
+func TestHomeShowsLogoWithInfo(t *testing.T) {
+	m := NewHomeModel(homeOpts())
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	lines := strings.Split(plain(strings.Split(m.View(), "\n")), "\n")
+	var logoLine string
+	for _, l := range lines {
+		if strings.Contains(l, "█▀▀▀") {
+			logoLine = l
+		}
+	}
+	if logoLine == "" || !strings.Contains(logoLine, "OOW") {
+		t.Fatalf("product not beside the logo:\n%s", strings.Join(lines, "\n"))
+	}
+
+	// An OS name too long to fit beside the logo goes below it.
+	opts := homeOpts()
+	opts.OS = "Windows 11 Pro for Workstations 24H2 (26100.1)"
+	m = NewHomeModel(opts)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 50, Height: 40})
+	v := plain(strings.Split(m.View(), "\n"))
+	if !strings.Contains(v, "█▄▄▄▄█") || !strings.Contains(v, "Workstations") {
+		t.Fatalf("narrow layout lost the logo or the OS:\n%s", v)
+	}
+	for _, l := range strings.Split(v, "\n") {
+		if strings.Contains(l, "█") && strings.Contains(l, "Workstations") {
+			t.Errorf("OS squeezed beside the logo: %q", l)
+		}
+	}
+}

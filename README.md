@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/oow-lockup-dark.svg">
+    <img alt="oow" src="assets/brand/oow-lockup.svg" width="320">
+  </picture>
+</p>
+
 # out-of-windows (`oow`)
 
 **A Windows-native system maintenance tool for the terminal.** One small binary to clean

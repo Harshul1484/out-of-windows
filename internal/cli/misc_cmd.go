@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,6 +33,11 @@ func newVersionCmd(app *App) *cobra.Command {
 					"os":       osInfo,
 					"elevated": system.IsElevated(),
 				})
+			}
+			// The logo only on a terminal: piped output stays the two
+			// lines scripts may read.
+			if f, ok := app.Out.(*os.File); ok && ui.IsTerminal(f) {
+				app.println(strings.Join(ui.LogoLockup(), "\n") + "\n")
 			}
 			app.println(buildinfo.String())
 			app.println(osInfo.String())
