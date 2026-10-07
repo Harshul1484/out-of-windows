@@ -1,0 +1,21 @@
+# Template, not published: see packaging/README.md.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+PackageIdentifier: <PACKAGE_IDENTIFIER>
+PackageVersion: <VERSION>
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: oow.exe
+    PortableCommandAlias: oow
+Commands:
+  - oow
+MinimumOSVersion: 10.0.17763.0
+Installers:
+  - Architecture: x64
+    InstallerUrl: <URL_AMD64>
+    InstallerSha256: <SHA256_AMD64>
+  - Architecture: arm64
+    InstallerUrl: <URL_ARM64>
+    InstallerSha256: <SHA256_ARM64>
+ManifestType: installer
+ManifestVersion: 1.10.0
