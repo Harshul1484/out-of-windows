@@ -34,6 +34,20 @@ type Record struct {
 	// Apps lists applications uninstalled in this operation. Later leftover
 	// scans use them as evidence of what used to be installed.
 	Apps []AppIdentity `json:"apps,omitempty"`
+	// Changes lists settings changed by the operation (startup entries,
+	// the user PATH, maintenance tasks), each with what is needed to undo it.
+	Changes []Change `json:"changes,omitempty"`
+}
+
+// Change is one setting changed or one task run.
+type Change struct {
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Action string `json:"action"` // e.g. disabled, enabled, removed-path-entry, ran
+	Status string `json:"status"` // changed, skipped, failed
+	// Detail is e.g. the value before the change or the backup file.
+	Detail string `json:"detail,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 // AppIdentity records an uninstalled application.
