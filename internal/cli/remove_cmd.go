@@ -455,7 +455,7 @@ func printRemovePlan(app *App, items []removeItemJSON) {
 				mark = ui.Err.Render(ui.SymErr)
 			}
 			app.printf("   %s %s %s\n", mark, ui.Muted.Render(label), it.Path)
-			app.printf("%s%s\n", indent, ui.Muted.Render(ui.Wrap("kept: "+it.Reason, max(30, width-len(indent)), indent)))
+			app.printf("%s%s\n", indent, ui.RenderLines(ui.Muted, ui.Wrap("kept: "+it.Reason, max(30, width-len(indent)), indent)))
 			continue
 		}
 		app.printf("   %s %s %s %s\n", ui.Accent.Render(ui.SymItem), label, ui.Muted.Render(ui.PadRight(what, 22)), it.Path)

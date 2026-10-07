@@ -568,7 +568,7 @@ func printLeftovers(app *App, found *leftovers.Result, evidence map[string]lefto
 			}
 			app.printf("     %s %s %s%s\n", ui.PadRight(confidenceLabel(c.Confidence), 7), ui.PadLeft(ui.Bytes(c.Bytes), 9),
 				ui.TruncateMiddle(c.Path, width-30), admin)
-			app.printf("       %s\n", ui.Muted.Render(ui.Wrap(strings.Join(c.Reasons, "; "), width-10, "       ")))
+			app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(strings.Join(c.Reasons, "; "), width-10, "       ")))
 		}
 		app.printf("\n %s %s %s\n", ui.PadRight("Total", 12), ui.Title.Render(ui.Bytes(found.Bytes())),
 			ui.Muted.Render("in "+ui.Plural(len(found.Candidates), "folder", "folders")))

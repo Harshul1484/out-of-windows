@@ -392,7 +392,7 @@ func printPurgeScan(app *App, res *purge.Result) {
 				ui.PadLeft(ui.Bold.Render(ui.Bytes(a.Bytes)), 9), ui.PadLeft(ui.Plural(a.Files, "file", "files"), 12),
 				ui.Muted.Render(ui.Truncate(a.Label, max(10, width-nameW-34))))
 			if len(a.Reasons) > 0 {
-				app.printf("       %s\n", ui.Muted.Render(ui.Wrap(strings.Join(a.Reasons, "; "), width-10, "       ")))
+				app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(strings.Join(a.Reasons, "; "), width-10, "       ")))
 			}
 		}
 		if header {
@@ -407,7 +407,7 @@ func printPurgeScan(app *App, res *purge.Result) {
 				break
 			}
 			app.printf("   %s %s\n", ui.Muted.Render(ui.SymSkip), ui.TruncateMiddle(a.Path, width-6))
-			app.printf("       %s\n", ui.Muted.Render(ui.Wrap(strings.Join(a.Reasons, "; "), width-10, "       ")))
+			app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(strings.Join(a.Reasons, "; "), width-10, "       ")))
 		}
 		app.println()
 	}

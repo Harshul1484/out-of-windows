@@ -21,6 +21,23 @@ func TestBytes(t *testing.T) {
 	}
 }
 
+// Wrapped reasons must not end in padding: rendering a multi-line string in
+// one lipgloss call pads every line to the widest.
+func TestRenderLinesLeavesNoTrailingSpaces(t *testing.T) {
+	wrapped := Wrap("contains links or junctions (workspace or pnpm links), which are never deleted; remove it with its package manager", 40, "   ")
+	if !strings.Contains(wrapped, "\n") {
+		t.Fatalf("expected several lines: %q", wrapped)
+	}
+	for _, line := range strings.Split(RenderLines(Muted, wrapped), "\n") {
+		if plain := strings.TrimRight(line, "\x1b[0123456789;m"); strings.HasSuffix(plain, " ") {
+			t.Errorf("trailing spaces in %q", line)
+		}
+	}
+	if got := RenderLines(Muted, ""); got != Muted.Render("") {
+		t.Errorf("empty input = %q", got)
+	}
+}
+
 func TestCountAndPlural(t *testing.T) {
 	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 1234567: "1,234,567", -4200: "-4,200"} {
 		if got := Count(n); got != want {

@@ -8,6 +8,7 @@ package ui
 
 import (
 	"os"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -48,6 +49,17 @@ var (
 	Box    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBorder).Padding(0, 2)
 	Rule   = lipgloss.NewStyle().Foreground(colBorder)
 )
+
+// RenderLines styles each line of s on its own. Rendering a multi-line
+// string in one call pads every line to the widest one, which leaves
+// trailing spaces after wrapped text.
+func RenderLines(st lipgloss.Style, s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = st.Render(l)
+	}
+	return strings.Join(lines, "\n")
+}
 
 var colorEnabled = true
 

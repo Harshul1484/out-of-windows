@@ -355,7 +355,7 @@ func printInstallers(app *App, res *installer.Result, warnings []string) {
 			app.printf("   %s %s %s  %s\n", mark, ui.PadRight(ui.TruncateMiddle(relTo(f.Path, p.Path), nameW), nameW),
 				ui.PadLeft(ui.Bold.Render(ui.Bytes(p.Size)), 9), ui.Muted.Render(ui.Truncate(info, max(10, width-nameW-17))))
 			if len(p.Reasons) > 0 {
-				app.printf("       %s\n", ui.Muted.Render(ui.Wrap(strings.Join(p.Reasons, "; "), width-10, "       ")))
+				app.printf("       %s\n", ui.RenderLines(ui.Muted, ui.Wrap(strings.Join(p.Reasons, "; "), width-10, "       ")))
 			}
 		}
 		app.println()
