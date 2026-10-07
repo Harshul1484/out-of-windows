@@ -1,0 +1,32 @@
+{
+    "##": "Template, not published: see packaging/README.md.",
+    "version": "<VERSION>",
+    "description": "Windows-native system maintenance from the terminal: cleanup, complete uninstall, disk analysis and live status.",
+    "homepage": "https://github.com/Harshul1484/out-of-windows",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "<URL_AMD64>",
+            "hash": "<SHA256_AMD64>"
+        },
+        "arm64": {
+            "url": "<URL_ARM64>",
+            "hash": "<SHA256_ARM64>"
+        }
+    },
+    "bin": "oow.exe",
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/Harshul1484/out-of-windows/releases/download/v$version/oow-$version-windows-amd64.zip"
+            },
+            "arm64": {
+                "url": "https://github.com/Harshul1484/out-of-windows/releases/download/v$version/oow-$version-windows-arm64.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}

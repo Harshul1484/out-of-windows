@@ -1,0 +1,190 @@
+name: Release
+
+# Releases are tag-driven: pushing a v* tag builds, checksums, attests and
+# publishes. A manual run (workflow_dispatch) is always a dry run: it builds
+# and checksums the same files and uploads them as a workflow artifact, but
+# never attests or publishes anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the dry-run build (nothing is published)"
+        required: true
+        default: "0.0.0-dryrun"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build and checksum
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          # No shared build cache for release binaries.
+          cache: false
+
+      - name: resolve version
+        id: version
+        shell: pwsh
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          $v = if ($env:EVENT -eq 'push') { $env:REF_NAME } else { $env:INPUT_VERSION }
+          $v = $v -replace '^v', ''
+          if ($v -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$') {
+            throw "'$v' is not a semantic version (expected a tag like v1.2.3 or v1.2.3-rc.1)"
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: go vet and test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: build
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $date = git log -1 --format=%cI   # commit time, so rebuilds are reproducible
+          $pkg = 'github.com/Harshul1484/out-of-windows/internal/buildinfo'
+          $ldflags = "-s -w -X $pkg.Version=$env:VERSION -X $pkg.Commit=$env:COMMIT -X $pkg.Date=$date -X $pkg.Repo=$env:REPO"
+          New-Item -ItemType Directory -Force dist, stage | Out-Null
+          $env:GOOS = 'windows'
+          $env:CGO_ENABLED = '0'
+          foreach ($arch in 'amd64', 'arm64') {
+            $env:GOARCH = $arch
+            $name = "oow-$env:VERSION-windows-$arch"
+            go build -trimpath -ldflags $ldflags -o "dist/$name.exe" ./cmd/oow
+            if ($LASTEXITCODE -ne 0) { throw "go build for $arch failed" }
+            $dir = "stage/$name"
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Copy-Item "dist/$name.exe" "$dir/oow.exe"
+            Copy-Item LICENSE, README.md $dir
+            Compress-Archive -Path "$dir/*" -DestinationPath "dist/$name.zip"
+          }
+
+      - name: check the version stamp
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $info = & "dist/oow-$env:VERSION-windows-amd64.exe" version --json | ConvertFrom-Json
+          if ($info.version -ne $env:VERSION) { throw "built binary reports version '$($info.version)', expected '$env:VERSION'" }
+          if ($info.commit -eq 'none') { throw 'commit was not stamped into the binary' }
+          Write-Host "oow $($info.version) ($($info.commit)) built $($info.built)"
+
+      - name: checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lines = Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant(), $_.Name
+          }
+          # LF line endings, so `sha256sum -c` works as well as oow update.
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/SHA256SUMS'), (($lines -join "`n") + "`n"))
+          Get-Content dist/SHA256SUMS
+          "### SHA256SUMS`n``````text`n$($lines -join "`n")`n``````" >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: attest and publish
+    needs: build
+    # Only a pushed v* tag publishes; manual runs stop after the build.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # create the release and upload its assets
+      id-token: write     # sign the build-provenance attestation (Sigstore)
+      attestations: write # store the attestation
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-dist
+          path: dist
+
+      - name: verify checksums
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+
+      # Fails the release (before anything is published) if attestations are
+      # unavailable, e.g. while the repository is private without GitHub
+      # Enterprise Cloud.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: release notes
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<EOF
+          ## Install
+
+          PowerShell (no administrator rights needed):
+
+          \`\`\`powershell
+          irm https://raw.githubusercontent.com/${REPO}/main/scripts/install.ps1 | iex
+          \`\`\`
+
+          Or download \`oow-${VERSION}-windows-amd64.zip\` (or \`arm64\`) below. Already installed? Run \`oow update\`.
+
+          ## Verify
+
+          Every file is listed in \`SHA256SUMS\` and has a build-provenance attestation:
+
+          \`\`\`powershell
+          (Get-FileHash oow-${VERSION}-windows-amd64.exe -Algorithm SHA256).Hash   # compare with SHA256SUMS
+          gh attestation verify oow-${VERSION}-windows-amd64.exe --repo ${REPO}
+          \`\`\`
+
+          ## Known issue
+
+          Microsoft Defender may flag \`oow.exe\` as malware. This is a false positive: oow lists the
+          names of browser credential files, wallets and key stores in order to protect them, which
+          resembles an information stealer to machine-learning detection. Check the SHA-256 and the
+          attestation above. Code signing and false-positive submissions to Microsoft are planned.
+          EOF
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            "${flags[@]}"

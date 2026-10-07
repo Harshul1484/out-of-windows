@@ -116,6 +116,27 @@ on discovery succeeding.
   Recycle Bin are refused rather than deleted from. Only high-confidence leftovers are
   preselected, and `--yes` takes only those.
 
+### 3c. Updating and removing oow itself
+
+- **The tool's own folders** stay protected for every purpose except `PurposeSelfRemove`,
+  used only by `oow remove`: it allows exactly one of the config or data folders (never a
+  parent or a child), and still refuses it when it is critical, whitelisted or contains a
+  whitelisted path, sensitive, in a system tree or in user content. `oow remove` also keeps
+  folders chosen through `OOW_CONFIG_DIR` / `OOW_DATA_DIR` or not at the Known Folder location.
+  The folders go to the Recycle Bin through `RecycleVerified`, which re-checks the guard on
+  the OS-resolved final path.
+- **The executable** is removed only when it is exactly `%LOCALAPPDATA%\Programs\oow\oow.exe`
+  (the installer's folder, from the Known Folder API). A running program cannot delete its own
+  file, so `oow remove` uses no self-deletion technique: it prints the command that removes
+  the file and the then-empty folder after exit.
+- **Registry**: the only value written is the user `Path` (`HKCU\Environment`), only to drop
+  entries equal to the installer's folder; every other entry is kept verbatim, the value type
+  is preserved, and the write is refused if the value changed after it was read.
+- **Update** replaces the executable only with a download whose SHA-256 matches the release's
+  `SHA256SUMS` (fail closed). The old file is renamed aside, never overwritten, and removed on
+  the next start through `RemoveVerified` with an exact final-path check. Package-managed
+  installs (winget, Scoop, Chocolatey) are never updated or removed by `oow`.
+
 ### 4. Scanning
 
 The walker never descends into reparse points (junctions, symlinks, mount points); they are

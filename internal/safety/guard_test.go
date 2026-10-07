@@ -418,3 +418,52 @@ func FuzzGuardScope(f *testing.F) {
 		}
 	})
 }
+
+// The tool's own folders may be removed only through PurposeSelfRemove, only
+// exactly (never a parent or child), and only when nothing else protects them.
+func TestSelfRemovePurpose(t *testing.T) {
+	cfg, data := `C:\Users\alice\AppData\Roaming\oow`, `C:\Users\alice\AppData\Local\oow`
+	g := NewGuard(testLocations(), nil)
+	for _, p := range []string{cfg, data, `\?\C:\Users\alice\AppData\Local\OOW\`} {
+		if d := g.Check(Request{Path: p, Purpose: PurposeSelfRemove}); !d.Allowed {
+			t.Errorf("own folder %s denied: %s", p, d.Reason)
+		}
+		// Every other purpose still refuses it.
+		for _, purpose := range []Purpose{PurposeCleanup, PurposeUserSelected, PurposeLeftover} {
+			if d := g.Check(Request{Path: p, Purpose: purpose, Scope: `C:\Users\alice\AppData\Local`}); d.Allowed {
+				t.Errorf("own folder %s allowed for purpose %d", p, purpose)
+			}
+		}
+	}
+	for _, p := range append([]string{
+		data + `\history.jsonl`,                // a child
+		data + `\logs`,                         // a child folder
+		`C:\Users\alice\AppData\Local`,         // a parent
+		`C:\Users\alice\AppData\Local\oow-old`, // a lookalike
+		`C:\Users\alice\AppData\Local\Contoso`, // unrelated
+		`C:\Users\alice\Documents`,             // user content
+	}, dangerousPaths...) {
+		if d := g.Check(Request{Path: p, Purpose: PurposeSelfRemove}); d.Allowed {
+			t.Errorf("self-remove allowed %s", p)
+		}
+	}
+
+	// Own folders that something else protects are refused.
+	risky := testLocations()
+	risky.SelfDirs = []string{
+		`C:\Users\alice\Documents\oow`,          // user content (e.g. OOW_DATA_DIR)
+		`C:\Program Files\oow`,                  // system tree
+		`C:\Users\alice\.ssh`,                   // sensitive
+		`C:\Users\alice\AppData\Local\Temp`,     // critical
+		`C:\Users\alice\AppData\Local\Contoso`,  // whitelisted below
+		`C:\Users\alice\AppData\Local\Fabrikam`, // contains a whitelisted path
+		`C:\Users`,                              // critical
+		`D:\`,                                   // drive root
+	}
+	g = NewGuard(risky, []string{`C:\Users\alice\AppData\Local\Contoso`, `C:\Users\alice\AppData\Local\Fabrikam\keep`})
+	for _, p := range risky.SelfDirs {
+		if d := g.Check(Request{Path: p, Purpose: PurposeSelfRemove}); d.Allowed {
+			t.Errorf("self-remove allowed protected own folder %s", p)
+		}
+	}
+}

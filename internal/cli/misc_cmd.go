@@ -67,6 +67,9 @@ func newSandboxCmd(app *App) *cobra.Command {
 			if err := sandbox.Seed(dir); err != nil {
 				return err
 			}
+			if err := sandbox.SeedInstall(dir); err != nil {
+				return err
+			}
 			if app.JSON {
 				return app.printJSON(map[string]string{"sandbox": dir})
 			}
