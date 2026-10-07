@@ -113,6 +113,10 @@ func newRootCmd(app *App) *cobra.Command {
 		newAnalyzeCmd(app),
 		newStatusCmd(app),
 		newProcessesCmd(app),
+		newOptimizeCmd(app),
+		newStartupCmd(app),
+		newDoctorCmd(app),
+		newRepairCmd(app),
 		newConfigCmd(app),
 		newHistoryCmd(app),
 		newVersionCmd(app),
@@ -202,10 +206,6 @@ type planned struct {
 var plannedCommands = []planned{
 	{"installer", "Find installer files you no longer need", "Phase 7", "clean", nil},
 	{"purge", "Remove rebuildable developer artifacts (node_modules, target, ...)", "Phase 7", "clean", nil},
-	{"optimize", "Run bounded, explained maintenance tasks", "Phase 6", "system", nil},
-	{"startup", "Review and disable startup applications", "Phase 6", "system", nil},
-	{"doctor", "Diagnose common Windows problems", "Phase 6", "system", nil},
-	{"repair", "Guided repair for problems found by doctor", "Phase 6", "system", nil},
 	{"update", "Update " + buildinfo.Name + " to the latest release", "Phase 8", "tool", nil},
 	{"remove", "Uninstall " + buildinfo.Name + " itself", "Phase 8", "tool", nil},
 }
