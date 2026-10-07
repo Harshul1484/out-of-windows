@@ -418,3 +418,156 @@ func FuzzGuardScope(f *testing.F) {
 		}
 	})
 }
+
+func TestPurgePurpose(t *testing.T) {
+	g := NewGuard(testLocations(), []string{`D:\dev\keep\node_modules\patched`})
+	gh := `C:\Users\alice\Documents\GitHub\web`
+	type c struct {
+		path, scope string
+		dir         bool
+	}
+	allowed := []c{
+		{gh + `\node_modules\react\index.js`, gh + `\node_modules`, false},
+		{gh + `\node_modules\react`, gh + `\node_modules`, true},
+		{gh + `\node_modules`, gh + `\node_modules`, true}, // the artifact itself, once empty
+		{`D:\dev\rust\app\target\debug\app.exe`, `D:\dev\rust\app\target`, false},
+		{`C:\Users\alice\source\repos\Api\bin\Debug\net8.0\Api.dll`, `C:\Users\alice\source\repos\Api\bin`, false},
+		{`C:\Users\alice\Desktop\proj\.venv\Lib\site-packages\certifi\cacert.pem`, `C:\Users\alice\Desktop\proj\.venv`, false},
+		{gh + `\node_modules\https-proxy-agent\test\key.pem`, gh + `\node_modules`, false},
+		{gh + `\node_modules\history`, gh + `\node_modules`, true}, // a package, not browser history
+		{gh + `\node_modules\cookies`, gh + `\node_modules`, true}, // a package, not browser cookies
+		{`D:\dev\cpp\eng\cmake-build-debug\CMakeCache.txt`, `D:\dev\cpp\eng\cmake-build-debug`, false},
+	}
+	for _, x := range allowed {
+		if d := g.Check(Request{Path: x.path, Purpose: PurposePurge, Scope: x.scope, Dir: x.dir}); !d.Allowed {
+			t.Errorf("purge of %s (scope %s) denied: %s", x.path, x.scope, d.Reason)
+		}
+	}
+	if d := g.Check(Request{Path: gh + `\node_modules\x`, Purpose: PurposePurge, Scope: gh + `\node_modules`}); d.Class != ClassUserContent {
+		t.Errorf("class in Documents = %v", d.Class)
+	}
+
+	denied := []c{
+		{gh + `\node_modules\x.js`, "", false},                              // no scope
+		{gh + `\src\index.js`, gh + `\src`, false},                          // not an artifact name
+		{gh + `\src\index.js`, gh + `\node_modules`, false},                 // outside the scope
+		{gh, gh + `\node_modules`, true},                                    // the project root
+		{gh + `\node_modules\..\src\index.js`, gh + `\node_modules`, false}, // traversal out
+		{gh + `\node_modules\..\..\..\..\Desktop\a.txt`, gh + `\node_modules`, false},
+		{gh + `\node_modules\pkg\.git\config`, gh + `\node_modules`, false}, // nested repository
+		{gh + `\node_modules\pkg\.GIT`, gh + `\node_modules`, true},
+		{gh + `\node_modules\id_rsa`, gh + `\node_modules`, false}, // key placed in the store
+		{gh + `\.venv\deploy.pem`, gh + `\.venv`, false},
+		{gh + `\dist\deploy\server.key`, gh + `\dist`, false}, // key in build output
+		{`D:\dev\app\bin\Release\signing.pfx`, `D:\dev\app\bin`, false},
+		{`D:\node_modules\x`, `D:\node_modules`, false},                         // project at a drive root
+		{`C:\Users\alice\node_modules\x`, `C:\Users\alice\node_modules`, false}, // profile is not a project
+		{`C:\Users\alice\Documents\node_modules\x`, `C:\Users\alice\Documents\node_modules`, false},
+		{`C:\Users\alice\.vscode\extensions\ms-python\node_modules\x`, `C:\Users\alice\.vscode\extensions\ms-python\node_modules`, false},
+		{`C:\Users\alice\AppData\Roaming\npm\node_modules\pkg\x`, `C:\Users\alice\AppData\Roaming\npm\node_modules`, false},
+		{`C:\Users\alice\AppData\Local\Temp\proj\build\x`, `C:\Users\alice\AppData\Local\Temp\proj\build`, false},
+		{`C:\Users\alice\scoop\apps\nodejs\current\node_modules\x`, `C:\Users\alice\scoop\apps\nodejs\current\node_modules`, false},
+		{`C:\Users\alice\go\pkg\mod\x@v1\build\a`, `C:\Users\alice\go\pkg\mod\x@v1\build`, false},
+		{`C:\Users\alice\.cargo\registry\src\x\target\a`, `C:\Users\alice\.cargo\registry\src\x\target`, false},
+		{`C:\Program Files\nodejs\node_modules\npm\x`, `C:\Program Files\nodejs\node_modules`, false},
+		{`C:\ProgramData\app\bin\x.dll`, `C:\ProgramData\app\bin`, false},
+		{`C:\Windows\Temp\proj\build\x`, `C:\Windows\Temp\proj\build`, false},
+		{`D:\dev\keep\node_modules\patched\x.js`, `D:\dev\keep\node_modules`, false}, // whitelisted
+		{`D:\dev\keep\node_modules\other.js`, `D:\dev\keep\node_modules`, false},     // whitelist inside the scope
+		{`\\server\share\proj\node_modules\x`, `\\server\share\proj\node_modules`, false},
+		{gh + `\node_modules`, gh + `\node_modules\..\..\..`, true},
+	}
+	for _, x := range denied {
+		for _, v := range []string{x.path, strings.ToUpper(x.path), strings.ReplaceAll(x.path, `\`, `/`), `\\?\` + x.path} {
+			if d := g.Check(Request{Path: v, Purpose: PurposePurge, Scope: x.scope, Dir: x.dir}); d.Allowed {
+				t.Errorf("purge of %s (scope %q) allowed", v, x.scope)
+			}
+		}
+	}
+	// Dangerous paths stay protected whatever artifact scope is claimed.
+	for _, p := range dangerousPaths {
+		for _, v := range variants(p) {
+			for _, scope := range []string{gh + `\node_modules`, `C:\Users\alice\Documents\node_modules`, `C:\Windows\build`, `C:\node_modules`} {
+				if d := g.Check(Request{Path: v, Purpose: PurposePurge, Scope: scope, Dir: true}); d.Allowed {
+					t.Errorf("purge allowed for dangerous path %q (scope %q)", v, scope)
+				}
+			}
+		}
+	}
+}
+
+func TestValidatePurgeArtifact(t *testing.T) {
+	g := NewGuard(testLocations(), nil)
+	for _, ok := range []string{
+		`C:\Users\alice\source\repos\web\node_modules`, `D:\code\svc\.venv`, `D:\code\svc\venv`,
+		`C:\Users\alice\Desktop\game\.dart_tool`, `D:\x\cpp\build-release`, `D:\x\y\OBJ`,
+	} {
+		if _, err := g.ValidatePurgeArtifact(ok); err != nil {
+			t.Errorf("ValidatePurgeArtifact(%q): %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		`D:\code\svc\vendor`, `D:\code\svc\src`, `D:\code\svc\packages`, `D:\code\svc`,
+		`C:\`, `C:\Users\alice`, `C:\Users\alice\Documents`, `C:\Users\alice\.ssh\build`,
+		`C:\Users\alice\AppData\Local\Programs\app\bin`, `C:\Users\alice\.nuget\packages\x\build`,
+		`C:\Users\alice\miniconda3\pkgs\x\build`,
+	} {
+		if _, err := g.ValidatePurgeArtifact(bad); err == nil {
+			t.Errorf("ValidatePurgeArtifact(%q) accepted", bad)
+		}
+	}
+	for _, name := range []string{"node_modules", ".next", "target", "bin", "obj", "__pycache__", "cmake-build-debug", "build-x64"} {
+		if !IsPurgeArtifactName(name) {
+			t.Errorf("%s is not an artifact name", name)
+		}
+	}
+	if IsPurgeSensitive("node_modules", 3, "key.pem") || !IsPurgeSensitive("node_modules", 1, "key.pem") ||
+		!IsPurgeSensitive("dist", 4, "key.pem") || IsPurgeSensitive("dist", 1, "bundle.js") {
+		t.Error("IsPurgeSensitive rules are wrong")
+	}
+}
+
+// FuzzPurgeScope checks the purge invariant: anything the guard allows lies
+// inside a validated artifact folder with a known name, never inside a .git
+// folder, AppData, a tool folder or a system tree.
+func FuzzPurgeScope(f *testing.F) {
+	g := NewGuard(testLocations(), nil)
+	for _, s := range [][2]string{
+		{`C:\Users\alice\Documents\GitHub\web\node_modules\x`, `C:\Users\alice\Documents\GitHub\web\node_modules`},
+		{`C:\Users\alice\Documents\GitHub\web\node_modules\..\..\x`, `C:\Users\alice\Documents\GitHub\web\node_modules`},
+		{`D:\dev\a\target\.git\x`, `D:\dev\a\target`},
+		{`\\?\D:\dev\a\target\debug`, `D:\dev\a\target`},
+		{`C:\Users\alice\AppData\Local\x\build\y`, `C:\Users\alice\AppData\Local\x\build`},
+	} {
+		f.Add(s[0], s[1], false)
+		f.Add(s[0], s[1], true)
+	}
+	f.Fuzz(func(t *testing.T, p, scope string, dir bool) {
+		d := g.Check(Request{Path: p, Purpose: PurposePurge, Scope: scope, Dir: dir})
+		if !d.Allowed {
+			return
+		}
+		n, err := Normalize(p)
+		if err != nil {
+			t.Fatalf("allowed unparseable path %q", p)
+		}
+		s, err := Normalize(scope)
+		if err != nil || !IsWithin(n, s) {
+			t.Fatalf("allowed %q outside scope %q", n, scope)
+		}
+		if !IsPurgeArtifactName(baseName(s)) || IsVolumeRoot(s) {
+			t.Fatalf("allowed scope %q without an artifact name", s)
+		}
+		for _, part := range splitNonEmpty(n) {
+			if strings.EqualFold(part, ".git") {
+				t.Fatalf("allowed %q inside a .git folder", n)
+			}
+		}
+		for _, forbidden := range []string{`C:\Windows`, `C:\Program Files`, `C:\ProgramData`,
+			`C:\Users\alice\AppData`, `C:\Users\alice\.ssh`, `C:\Users\alice\.vscode`} {
+			if IsWithin(n, forbidden) {
+				t.Fatalf("allowed %q inside %s", n, forbidden)
+			}
+		}
+	})
+}
