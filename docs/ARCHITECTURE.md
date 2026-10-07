@@ -58,7 +58,7 @@ Every change to the machine goes through one of these sinks; review them line by
 
 | Change | Sink | Guard purpose | Used by |
 |---|---|---|---|
-| Permanent file and folder deletion | `filesystem.RemoveVerified` | `PurposeCleanup` (rule scope), `PurposePurge` (artifact scope) | `clean`, `purge` (preselected), `update` and `remove` (own executable, exact path via `install.RemoveOwnFile`), sandbox simulations |
+| Permanent file and folder deletion | `filesystem.RemoveVerified` | `PurposeCleanup` (rule scope), `PurposePurge` (artifact scope), `PurposeShortcut` with `Dir` (an emptied Start Menu folder) | `clean`, `purge` (preselected), `leftovers` and `uninstall` (emptied Start Menu folders), `update` and `remove` (own executable, exact path via `install.RemoveOwnFile`), sandbox simulations |
 | Move to the Recycle Bin | `filesystem.RecycleVerified` | `PurposeUserSelected`, `PurposeLeftover`, `PurposeShortcut` (broken shortcuts with their leftover), `PurposePurge`, `PurposeSelfRemove` | `analyze`, `installer`, `leftovers` and `uninstall`, `purge` (from review), `remove` |
 | Empty the Recycle Bin | `system.RecycleBin` (`SHEmptyRecycleBinW`) | — | `clean` (Recycle Bin rule) |
 | App uninstall | `uninstall.Runner` (the app's own uninstaller) | — | `uninstall` |

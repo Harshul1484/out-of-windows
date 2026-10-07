@@ -123,7 +123,11 @@ on discovery succeeding.
   guard's **shortcut purpose**: scope must be one of the user's shortcut folders (accepted only
   strictly inside the profile and holding no AppData or other user folder), the path a `.lnk`
   file at most three levels inside it, never in the Startup folder, never protected or sensitive.
-  Shortcuts in the Start Menu or Desktop for all users are listed and left alone.
+  Shortcuts in the Start Menu or Desktop for all users are listed and left alone. A Start Menu
+  folder the moved shortcut leaves empty (`Programs\Contoso`) is removed through
+  `RemoveVerified`, which refuses a folder that is not empty; the same purpose with `Dir` allows
+  only a folder at most two levels inside the Start Menu root, never the root itself, the Startup
+  folder or a folder on the Desktop.
 - **Claims keep folders.** Anything matching an installed app (name, install folder, program
   folder), a running process, a service, a startup entry or a scheduled task is kept and listed
   as such. Scheduled tasks are read through the Task Scheduler API as the current user (every
@@ -424,6 +428,6 @@ show bytes removed and the *measured* change in free space.
 | DISM command lines fixed (never `/ResetBase`, `/SPSuperseded`, `/Defer`) | `optimize` `TestDISMCommandLines` |
 | Component store task: opt-in (DISM not started unless named; `--yes` alone never runs it), admin only, fresh analysis right before acting (also when ticked), runs only on DISM's recommendation, Ctrl+C leaves DISM to finish | `optimize` `TestComponentStoreIsOptIn`, `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreTickedWithoutAnalysis`, `TestRunComponentStoreRechecksBeforeActing`, `TestRunComponentStoreCancelLeavesDISMToFinish`; `cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeSandboxRunnerRechecksBeforeActing`, `TestOptimizeUnreadableDISMReportNeverRuns` |
 | Shortcut purpose: own Start Menu and Desktop only, `.lnk` only, never Startup, all-users folders, whitelist; root validation | `safety` `TestShortcutPurpose`, `FuzzShortcutScope` |
-| Broken shortcuts: exact folder only, never names, medium at most, user's own shortcuts recycled with their folder, changed shortcuts kept | `leftovers` `TestShortcutEvidence`, `TestShortcutsGoWithTheirFolder`, `TestUninstalledAppShortcuts`; `cli` `TestLeftoversCommand`, `TestUninstallEndToEnd` |
+| Broken shortcuts: exact folder only, never names, medium at most, user's own shortcuts recycled with their folder, changed shortcuts kept, emptied Start Menu folders removed (never the root, Startup or Desktop folders) | `leftovers` `TestShortcutEvidence`, `TestShortcutsGoWithTheirFolder`, `TestUninstalledAppShortcuts`; `cli` `TestLeftoversCommand`, `TestUninstallEndToEnd` |
 | Scheduled tasks keep the folders they use | `leftovers` `TestScheduledTasksClaimFolders`, `TestTaskClaimPaths` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |

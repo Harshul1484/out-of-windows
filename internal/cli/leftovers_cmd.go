@@ -152,12 +152,15 @@ func (a *App) recordLeftovers(out *leftovers.Outcome) {
 		return
 	}
 	rec := history.Record{Time: time.Now(), Command: "leftovers", Sandbox: a.Sandbox != "",
-		Removed: len(out.Recycled) + len(out.RecycledShortcuts), Recycled: out.Bytes, Skipped: len(out.Skipped), Errors: out.Errors}
+		Removed: len(out.Recycled) + len(out.RecycledShortcuts) + len(out.EmptyFolders), Recycled: out.Bytes, Skipped: len(out.Skipped), Errors: out.Errors}
 	for _, c := range out.Recycled {
 		rec.Targets = append(rec.Targets, history.TargetStat{ID: c.Path, Name: c.App, Removed: 1, Reclaimed: c.Bytes})
 	}
 	for _, p := range out.RecycledShortcuts {
 		rec.Targets = append(rec.Targets, history.TargetStat{ID: p, Name: "broken shortcut", Removed: 1})
+	}
+	for _, p := range out.EmptyFolders {
+		rec.Targets = append(rec.Targets, history.TargetStat{ID: p, Name: "empty Start Menu folder", Removed: 1})
 	}
 	a.record(rec)
 }

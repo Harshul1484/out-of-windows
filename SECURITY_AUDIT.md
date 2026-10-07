@@ -187,7 +187,10 @@ key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlit
   **`PurposeShortcut`**: scope must be one of `Locations.ShortcutRoots` that the guard accepted
   (strictly inside the profile, holding no AppData or user folder), the path a `.lnk` file at most
   three levels inside, never inside a never-remove folder within it (Startup), never whitelisted,
-  protected or sensitive. Shortcuts for all users are never removed.
+  protected or sensitive. Shortcuts for all users are never removed. A Start Menu folder the
+  shortcut leaves empty is then removed with `RemoveVerified` (which fails on a non-empty
+  folder) under the same purpose with `Dir`: at most two levels inside the root, never the root,
+  Startup or a Desktop folder; it is listed in `removed_empty_folders` and in history.
 - Leftovers are moved with `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO`, plus
   `FOF_WANTNUKEWARNING` so the Shell warns instead of silently deleting), only on fixed drives,
   after `filesystem.Verify` re-checks identity, links, the fence and the guard through a handle.
@@ -515,7 +518,7 @@ protected together with their ancestors (deleting a parent would delete them).
 | Uninstall plans, waiting, verification, cancel, restart, failure | `internal/uninstall/uninstall_test.go` |
 | Leftovers: evidence, confidence, claims, traces, broken entries, sensitive content, admin, junctions, swaps | `internal/leftovers/leftovers_test.go` |
 | Scheduled tasks as claims (program folder, working directory, argument paths; disabled tasks still claim) | `internal/leftovers` `TestScheduledTasksClaimFolders`, `TestTaskClaimPaths`; `internal/cli` `TestLeftoversCommand` |
-| Shortcut guard purpose (own Start Menu and Desktop, `.lnk` only, never Startup or all-users folders, whitelist, root validation) | `internal/safety` `TestShortcutPurpose`, `FuzzShortcutScope` |
+| Shortcut guard purpose (own Start Menu and Desktop, `.lnk` only, never Startup or all-users folders, whitelist, root validation; with `Dir`, only an emptied Start Menu folder at most two levels deep) | `internal/safety` `TestShortcutPurpose`, `FuzzShortcutScope` |
 | Broken shortcut evidence (exact folder, never names, generic folders refused, network targets unknown, medium at most, recent activity) and removal with the folder (all-users kept, changed shortcut kept) | `internal/leftovers` `TestShortcutEvidence`, `TestShortcutsGoWithTheirFolder`, `TestUninstalledAppShortcuts`; `internal/cli` `TestLeftoversCommand`, `TestUninstallEndToEnd` |
 | Uninstall/leftovers CLI (dry run, confirmation, JSON, failure, end to end) | `internal/cli/uninstall_test.go` |
 | Name normalization and command-line parsing | `internal/apps/apps_test.go` |

@@ -24,6 +24,9 @@ type Outcome struct {
 	Errors   int         `json:"errors"`
 	// RecycledShortcuts are the broken shortcuts moved with their folders.
 	RecycledShortcuts []string `json:"recycled_shortcuts"`
+	// EmptyFolders are the Start Menu folders those shortcuts left empty,
+	// which were removed (never the Start Menu or Desktop folder itself).
+	EmptyFolders []string `json:"removed_empty_folders"`
 }
 
 // Recycle moves the candidates to the Recycle Bin after re-verifying each
@@ -31,7 +34,7 @@ type Outcome struct {
 // folders left empty are removed too, and the removable broken shortcuts of
 // each folder that was moved follow it, each re-checked first.
 func Recycle(ctx context.Context, env *Env, cands []Candidate, r filesystem.Recycler) *Outcome {
-	out := &Outcome{RecycledShortcuts: []string{}}
+	out := &Outcome{RecycledShortcuts: []string{}, EmptyFolders: []string{}}
 	for _, c := range cands {
 		if ctx.Err() != nil {
 			out.Skipped = append(out.Skipped, Skipped{c.Path, "cancelled"})
@@ -65,6 +68,7 @@ func Recycle(ctx context.Context, env *Env, cands []Candidate, r filesystem.Recy
 				continue
 			}
 			out.RecycledShortcuts = append(out.RecycledShortcuts, sc.Path)
+			out.EmptyFolders = append(out.EmptyFolders, removeEmptyShortcutFolders(env, sc)...)
 		}
 	}
 	return out
@@ -109,4 +113,35 @@ func removeEmptyParent(c Candidate, check filesystem.CheckFunc) {
 	if e, err := filesystem.Lstat(parent); err == nil && e.IsDir() && !e.Reparse {
 		_ = filesystem.RemoveVerified(parent, e.Fingerprint, check)
 	}
+}
+
+// removeEmptyShortcutFolders removes the folders a recycled shortcut leaves
+// empty inside the user's Start Menu (for example Programs\Contoso), walking
+// up toward, but never including, the shortcut root. It stops at the first
+// folder that still holds anything, is a link, or the guard refuses;
+// RemoveVerified also refuses a folder that is not empty. It returns the
+// folders it removed.
+func removeEmptyShortcutFolders(env *Env, sc Shortcut) []string {
+	var removed []string
+	check := func(final string) error {
+		if d := env.Guard.Check(safety.Request{Path: final, Purpose: safety.PurposeShortcut, Scope: sc.Scope, Dir: true}); !d.Allowed {
+			return errors.New(d.Reason)
+		}
+		return nil
+	}
+	for dir := filepath.Dir(sc.Path); sc.Scope != "" && safety.IsStrictlyWithin(dir, sc.Scope); dir = filepath.Dir(dir) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			break
+		}
+		e, err := filesystem.Lstat(dir)
+		if err != nil || !e.IsDir() || e.Reparse {
+			break
+		}
+		if filesystem.RemoveVerified(dir, e.Fingerprint, check) != nil {
+			break
+		}
+		removed = append(removed, dir)
+	}
+	return removed
 }

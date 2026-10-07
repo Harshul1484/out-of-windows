@@ -386,10 +386,10 @@ func uninstallOne(ctx context.Context, app *App, inv *apps.Inventory, a apps.App
 	r.Recycled = recycled
 	target.Removed = 1
 	if recycled != nil {
-		rec.Removed = 1 + len(recycled.Recycled) + len(recycled.RecycledShortcuts)
+		rec.Removed = 1 + len(recycled.Recycled) + len(recycled.RecycledShortcuts) + len(recycled.EmptyFolders)
 		rec.Recycled = recycled.Bytes
 		rec.Skipped, rec.Errors = len(recycled.Skipped), recycled.Errors
-		target.Removed += len(recycled.Recycled) + len(recycled.RecycledShortcuts)
+		target.Removed += len(recycled.Recycled) + len(recycled.RecycledShortcuts) + len(recycled.EmptyFolders)
 		target.Skipped, target.Errors = len(recycled.Skipped), recycled.Errors
 	} else {
 		rec.Removed = 1
@@ -626,6 +626,9 @@ func printRecycled(app *App, out *leftovers.Outcome) {
 	}
 	for _, p := range out.RecycledShortcuts {
 		app.printf("   %s %s %s\n", ui.OK.Render(ui.SymOK), ui.PadLeft("shortcut", 9), p)
+	}
+	for _, p := range out.EmptyFolders {
+		app.printf("   %s %s %s %s\n", ui.OK.Render(ui.SymOK), ui.PadLeft("folder", 9), p, ui.Muted.Render("(left empty; removed)"))
 	}
 	for _, s := range out.Skipped {
 		app.printf("   %s %s %s\n", ui.Muted.Render(ui.SymSkip), s.Path, ui.Muted.Render(s.Reason))

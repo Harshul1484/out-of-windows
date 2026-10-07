@@ -166,7 +166,8 @@ what was actually left. With `--yes`, only `high` confidence leftovers are moved
 ```
 
 After a real run (`--yes`) a `recycled` object is added, as in `oow.uninstall/v1`, with
-`recycled_shortcuts` (the broken shortcuts moved with their folders; `[]` when none).
+`recycled_shortcuts` (the broken shortcuts moved with their folders; `[]` when none) and
+`removed_empty_folders` (Start Menu folders those shortcuts left empty, removed; `[]` when none).
 
 - `source`: `uninstalled`, `history`, `broken-entry`, `usage-trace`, `shortcut`.
 - `shortcut` evidence carries `shortcuts`: the shortcut files whose program (in `exes`) is gone.

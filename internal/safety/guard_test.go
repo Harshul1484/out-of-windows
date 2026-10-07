@@ -714,6 +714,30 @@ func TestShortcutPurpose(t *testing.T) {
 			t.Errorf("shortcut %s (scope %q) allowed", c[0], c[1])
 		}
 	}
+	// The empty folder a recycled shortcut leaves (#21): a folder at most two
+	// levels inside the Start Menu, never the root, Startup, the Desktop's
+	// folders, or anything outside the scope.
+	for _, p := range []string{sm + `\Contoso`, sm + `\Contoso\Studio`} {
+		if d := g.Check(Request{Path: p, Purpose: PurposeShortcut, Scope: sm, Dir: true}); !d.Allowed {
+			t.Errorf("empty shortcut folder %s denied: %s", p, d.Reason)
+		}
+	}
+	for _, c := range [][2]string{
+		{sm, sm},                   // the Start Menu folder itself
+		{sm + `\Startup`, sm},      // never-remove
+		{sm + `\Startup\Sub`, sm},  // inside never-remove
+		{sm + `\a\b\c`, sm},        // too deep for a shortcut folder
+		{sm + `\Keep`, sm},         // whitelisted
+		{desk + `\Projects`, desk}, // the user's own folder
+		{sm + `\Contoso`, desk},    // outside the scope
+		{sm + `\Contoso`, ""},      // no scope
+		{`C:\Users\alice\AppData\Roaming\Microsoft\Windows\Start Menu`, sm}, // above the root
+	} {
+		if d := g.Check(Request{Path: c[0], Purpose: PurposeShortcut, Scope: c[1], Dir: true}); d.Allowed {
+			t.Errorf("shortcut folder %s (scope %q) allowed", c[0], c[1])
+		}
+	}
+
 	// A folder holding the profile, AppData or another user folder, or one
 	// outside the profile, is never a shortcut root.
 	for _, root := range []string{`C:\Users\alice`, `C:\Users`, `D:\Desktop`, `C:\Users\alice\AppData`,

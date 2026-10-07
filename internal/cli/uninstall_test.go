@@ -38,7 +38,8 @@ type uninstallDoc struct {
 			Recycled []struct {
 				Path string `json:"path"`
 			} `json:"recycled"`
-			Shortcuts []string `json:"recycled_shortcuts"`
+			Shortcuts    []string `json:"recycled_shortcuts"`
+			EmptyFolders []string `json:"removed_empty_folders"`
 		} `json:"recycled"`
 	} `json:"results"`
 }
@@ -135,6 +136,15 @@ func TestUninstallEndToEnd(t *testing.T) {
 	sm := `C\Users\sandbox\AppData\Roaming\Microsoft\Windows\Start Menu\Programs`
 	if e.exists(sm + `\Contoso\Contoso Studio.lnk`) {
 		t.Error("the broken shortcut was not moved")
+	}
+	// The Start Menu folder the shortcut leaves empty goes too; the Programs
+	// folder itself stays (#21).
+	if e.exists(sm+`\Contoso`) || len(r.Recycled.EmptyFolders) != 1 ||
+		!strings.HasSuffix(r.Recycled.EmptyFolders[0], `\Start Menu\Programs\Contoso`) {
+		t.Errorf("empty Start Menu folder: exists=%v removed=%v", e.exists(sm+`\Contoso`), r.Recycled.EmptyFolders)
+	}
+	if !e.exists(sm) {
+		t.Error("the Start Menu Programs folder itself was removed")
 	}
 	for _, kept := range []string{sm + `\Wingtip Toys.lnk`, sm + `\Adatum\Adatum Photo.lnk`, sm + `\Startup\Old Notes.lnk`,
 		`C\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp\Contoso Studio Helper.lnk`} {

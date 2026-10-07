@@ -73,8 +73,11 @@ const (
 	// lived in. Scope must be one of the user's own shortcut folders
 	// (Locations.ShortcutRoots: Start Menu Programs, Desktop) that the guard
 	// accepted; the path must be a .lnk file at most three levels inside it,
-	// never inside a never-remove folder within it (the Startup folder, whose
-	// entries are disabled, never removed), never protected or sensitive.
+	// or (Request.Dir) a folder at most two levels inside it that a recycled
+	// shortcut left empty (the root itself never qualifies, and only an empty
+	// folder can be removed through RemoveVerified). Never inside a
+	// never-remove folder within the root (the Startup folder, whose entries
+	// are disabled, never removed), never protected or sensitive.
 	PurposeShortcut
 )
 
@@ -165,8 +168,9 @@ type Request struct {
 	// strictly inside it.
 	Scope string
 	// Dir says the path is a directory, as verified by the caller through a
-	// handle. Only PurposePurge uses it: sensitive file-type names apply to
-	// files, not to package folders such as node_modules\history.
+	// handle. PurposePurge uses it because sensitive file-type names apply to
+	// files, not to package folders such as node_modules\history;
+	// PurposeShortcut uses it for the empty folder a recycled shortcut leaves.
 	Dir bool
 }
 
@@ -389,7 +393,7 @@ func (g *Guard) ShortcutRoots() []string {
 	return out
 }
 
-func (g *Guard) checkShortcut(p, scope string) Decision {
+func (g *Guard) checkShortcut(p, scope string, dir bool) Decision {
 	s, err := Normalize(scope)
 	if err != nil || strings.TrimSpace(scope) == "" {
 		return deny(ClassOrdinary, "removing a shortcut requires the Start Menu or Desktop folder it is in")
@@ -404,11 +408,20 @@ func (g *Guard) checkShortcut(p, scope string) Decision {
 	if !IsStrictlyWithin(p, s) {
 		return deny(ClassOrdinary, "%s is outside %s", p, s)
 	}
-	if !strings.EqualFold(filepath.Ext(p), ".lnk") {
-		return deny(ClassOrdinary, "%s is not a shortcut (.lnk) file", p)
-	}
-	if len(splitNonEmpty(p))-len(splitNonEmpty(s)) > 3 {
+	depth := len(splitNonEmpty(p)) - len(splitNonEmpty(s))
+	switch {
+	case dir && depth > 2:
+		// A folder that held shortcuts (the deepest .lnk allowed is three
+		// levels down, so its folder is at most two).
 		return deny(ClassOrdinary, "%s is too deep inside %s", p, s)
+	case !dir && !strings.EqualFold(filepath.Ext(p), ".lnk"):
+		return deny(ClassOrdinary, "%s is not a shortcut (.lnk) file", p)
+	case !dir && depth > 3:
+		return deny(ClassOrdinary, "%s is too deep inside %s", p, s)
+	}
+	if _, ok := g.containing(g.userContent, p); ok && dir {
+		// Folders on the Desktop are the user's own, even when empty.
+		return deny(ClassUserContent, "%s is a folder in your files; only shortcut files are moved from there", p)
 	}
 	for _, c := range g.critical {
 		if IsStrictlyWithin(c.path, s) && IsWithin(p, c.path) {
@@ -742,7 +755,7 @@ func (g *Guard) Check(req Request) Decision {
 		return g.checkPurge(p, req.Scope, req.Dir)
 	}
 	if req.Purpose == PurposeShortcut {
-		return g.checkShortcut(p, req.Scope)
+		return g.checkShortcut(p, req.Scope, req.Dir)
 	}
 
 	if req.Purpose == PurposeCleanup && strings.TrimSpace(req.Scope) == "" {
