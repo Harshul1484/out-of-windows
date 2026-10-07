@@ -46,12 +46,57 @@ say so and exit with code 3.
 | `oow status` / `processes` | Live CPU/GPU/RAM/disk/network dashboard, process list | ✅ |
 | `oow optimize` / `doctor` / `startup` | Bounded maintenance, diagnostics, startup apps | Phase 6 |
 | `oow purge` / `installer` | Developer artifacts, unused installers | Phase 7 |
-| `oow update` / `remove` | Self-update and self-removal | Phase 8 |
+| `oow update` / `remove` | Verified self-update from GitHub Releases, self-removal | ✅ |
 
 ## Install
 
-Packaged releases (GitHub Releases, winget, Scoop, Chocolatey and a PowerShell installer)
-are planned once the name is final. Until then, build from source with Go 1.26+:
+> **Not published yet.** No release has been published and the project name is not final,
+> so there are no winget, Scoop or Chocolatey packages yet (unpublished templates live in
+> [packaging/](packaging/)). The installer below works once the first release is out and the
+> repository is public; until then, build from source.
+
+**PowerShell** (no administrator rights needed):
+
+```powershell
+irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/install.ps1 | iex
+```
+
+For a specific version:
+`& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/install.ps1))) -Version 1.2.3`.
+From **Command Prompt**, run [`scripts/install.cmd`](scripts/install.cmd).
+
+The installer picks the build for your CPU (x64 or ARM64), checks its SHA-256 against the
+release's `SHA256SUMS` before writing anything and stops on any mismatch, installs to
+`%LOCALAPPDATA%\Programs\oow`, and adds that folder to your user PATH if it is missing. For a
+private repository, set `GITHUB_TOKEN` or `GH_TOKEN` first.
+
+**Manually**: download `oow-<version>-windows-amd64.zip` (or `arm64`) from
+[GitHub Releases](https://github.com/Harshul1484/out-of-windows/releases) and verify it:
+
+```powershell
+(Get-FileHash .\oow-1.2.3-windows-amd64.zip -Algorithm SHA256).Hash   # compare with SHA256SUMS
+gh attestation verify .\oow-1.2.3-windows-amd64.zip --repo Harshul1484/out-of-windows
+```
+
+**Update and uninstall**:
+
+```powershell
+oow update --check     # is there a newer release?
+oow update             # download, verify the SHA-256, replace oow.exe (old version kept until next start)
+oow remove --dry-run   # what uninstalling would remove
+oow remove             # remove oow, its PATH entry, and its settings and history (to the Recycle Bin)
+```
+
+Copies installed with winget, Scoop or Chocolatey are updated and removed with that package
+manager; `oow update` and `oow remove` tell you the exact command.
+
+> **Known issue: antivirus false positive.** Microsoft Defender may flag `oow.exe` as malware.
+> `oow` lists the names of browser credential files, wallets and key stores in order to
+> protect them, which machine-learning detection can mistake for an information stealer.
+> Check the SHA-256 and the build attestation as shown above. Code signing and false-positive
+> submissions to Microsoft are planned.
+
+**From source** with Go 1.26+:
 
 ```powershell
 git clone https://github.com/Harshul1484/out-of-windows
@@ -61,7 +106,8 @@ go build -o oow.exe ./cmd/oow
 ```
 
 Works from PowerShell, Command Prompt and Windows Terminal. Supported: Windows 10 1809+
-and Windows 11 (x64); Windows Server 2022/2025 are tested in CI.
+and Windows 11 (x64; ARM64 builds are published but not yet tested in CI); Windows Server
+2022/2025 are tested in CI.
 
 ## Usage
 

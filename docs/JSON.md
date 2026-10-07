@@ -243,6 +243,74 @@ largest first, filtered by `--min-size`, at most `--top` entries.
 `{"schema", "time", "sort", "total", "processes": [...]}` with process objects as in
 `top_by_cpu` above, sorted by `--sort` (`cpu`, `memory`, `io`, `name`) and limited by `--top`.
 
+## `oow update --json` — `oow.update/v1`
+
+```json
+{
+  "schema": "oow.update/v1",
+  "check_only": false, "dry_run": false, "sandbox": false,
+  "repo": "Harshul1484/out-of-windows",
+  "current_version": "1.2.0", "dev_build": false,
+  "latest_version": "1.3.0", "update_available": true,
+  "managed_by": null,
+  "release": { "tag": "v1.3.0", "url": "https://github.com/Harshul1484/out-of-windows/releases/tag/v1.3.0",
+               "published_at": "2026-10-01T12:00:00Z" },
+  "asset": { "name": "oow-1.3.0-windows-amd64.exe", "size": 9830400, "sha256": "4f2a…" },
+  "executable": "C:\\Users\\me\\AppData\\Local\\Programs\\oow\\oow.exe",
+  "backup": "C:\\Users\\me\\AppData\\Local\\Programs\\oow\\oow.exe.old",
+  "updated": true,
+  "message": "The previous version stays as oow.exe.old until oow next starts."
+}
+```
+
+- `dev_build`: a source build (`0.1.0-dev`) cannot order itself against releases; it never
+  updates itself (exit 1) and `update_available` stays `false`.
+- `managed_by`: `null`, or `{"manager", "package", "update_command", "remove_command"}` with
+  `manager` one of `winget`, `scoop`, `chocolatey`. Such installs are not updated (exit 1);
+  `--check` still reports.
+- `release` is present once GitHub answered; `asset` and `backup` once an update was planned.
+  `sha256` comes from the release's `SHA256SUMS`; a missing file, a missing entry or a
+  mismatch stops the update (exit 1) with nothing replaced.
+- `error` is added (and the exit code is non-zero) when the update did not happen; `message`
+  always explains the outcome.
+
+## `oow remove --json` — `oow.remove/v1`
+
+```json
+{
+  "schema": "oow.remove/v1",
+  "dry_run": false, "sandbox": false, "keep_data": false,
+  "managed_by": null,
+  "executed": true,
+  "items": [
+    { "kind": "executable", "path": "C:\\Users\\me\\AppData\\Local\\Programs\\oow\\oow.exe",
+      "action": "remove", "status": "manual",
+      "reason": "it is the running program, and Windows does not let a running program delete its own file", "bytes": 0 },
+    { "kind": "install-dir", "path": "C:\\Users\\me\\AppData\\Local\\Programs\\oow",
+      "action": "remove-if-empty", "status": "manual", "bytes": 0 },
+    { "kind": "path-entry", "path": "C:\\Users\\me\\AppData\\Local\\Programs\\oow",
+      "action": "remove-from-path", "status": "done", "bytes": 0 },
+    { "kind": "config-dir", "path": "C:\\Users\\me\\AppData\\Roaming\\oow", "action": "recycle", "status": "done", "bytes": 412 },
+    { "kind": "data-dir", "path": "C:\\Users\\me\\AppData\\Local\\oow", "action": "recycle", "status": "done", "bytes": 48213 }
+  ],
+  "manual_steps": [
+    { "shell": "powershell", "command": "Remove-Item -LiteralPath '…\\oow.exe'; Remove-Item -LiteralPath '…\\Programs\\oow'" },
+    { "shell": "cmd", "command": "del \"…\\oow.exe\" && rmdir \"…\\Programs\\oow\"" }
+  ],
+  "errors": 0,
+  "message": "Almost done: run the command above to delete the program file."
+}
+```
+
+- `kind`: `executable`, `install-dir`, `path-entry`, `config-dir`, `data-dir` (when settings
+  and data share one folder, a single `data-dir` item covers both).
+- `action`: `remove`, `remove-if-empty`, `remove-from-path`, `recycle` (to the Recycle Bin),
+  or `keep` with a `reason` (outside the installer's folder, chosen with `OOW_CONFIG_DIR` /
+  `OOW_DATA_DIR`, whitelisted, `--keep-data`, ...).
+- `status`: `planned` (dry run), `done`, `kept`, `manual` (see `manual_steps`), `failed`.
+- `manual_steps` lists the commands that delete the running executable after `oow` exits.
+- `managed_by` is as in `oow.update/v1`; a package-managed install is not removed (exit 1).
+
 ## `oow config --json` — `oow.config/v1`
 
 `{"schema", "config_file", "data_dir", "sandbox", "config": {"version", "whitelist":

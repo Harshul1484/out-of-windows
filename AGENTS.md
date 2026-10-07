@@ -122,6 +122,13 @@ arrives.
 - `internal/system/`: Windows version, elevation, CPU, memory, disk, processes (read-only),
   and the Recycle Bin special (Shell API).
 - `internal/ui/`: styles, formatting, prompts, spinner, Bubble Tea checklist and home screen.
+- `internal/selfupdate/`: `oow update`: GitHub release client (token only to the API host),
+  semantic versions, `SHA256SUMS` verification (fail closed), staging, rename-aside
+  replacement with rollback, `.old` cleanup at start-up.
+- `internal/install/`: how `oow` is installed: the installer folder
+  (`%LOCALAPPDATA%\Programs\oow`), package-manager detection (winget, Scoop, Chocolatey), user
+  PATH editing (`UserPath`: registry, or a file in the sandbox), and executable removal through
+  the verified sink (`ExeRemover`; the running program is never deleted).
 - `internal/sandbox/`: simulated Windows layout and seed data for safe end-to-end runs.
 - `internal/testutil/`: test sandbox, deletion fence setup, fixtures, file locking.
 - `docs/SAFETY.md`: the safety model (design contract). `docs/ARCHITECTURE.md`,
@@ -129,8 +136,12 @@ arrives.
 - `SECURITY.md`: vulnerability reporting policy. `SECURITY_AUDIT.md`: security review notes.
 - `scripts/ci/`: CI-only scripts (`e2e-real.ps1` performs a real cleanup and refuses to run
   outside CI).
-- `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e),
-  `codeql.yml`.
+- `scripts/install.ps1`, `scripts/install.cmd`: per-user installer (SHA-256 verified, fails
+  closed, no admin). `packaging/`: winget, Scoop and Chocolatey templates, not published until
+  the name is final.
+- `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,
+  PowerShell script parsing), `codeql.yml`, `release.yml` (tag-driven builds, `SHA256SUMS`,
+  attestations, GitHub release; manual runs are dry runs).
 
 ## Commands
 

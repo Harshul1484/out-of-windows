@@ -25,7 +25,8 @@ Highest risk, in order:
    deletion outside its root.
 4. **Elevated execution**: when run as administrator, the same mistakes reach system data.
 5. **Configuration**: a lost or misread whitelist would silently widen deletion.
-6. **Release integrity** of distributed binaries (no releases yet; see future work).
+6. **Release integrity** of distributed binaries and of `oow update` (see *Distribution,
+   self-update and self-removal*).
 
 Lower risk: read-only commands (`history`, `config`, `version`, the home screen) and the
 planned `analyze` flow (user-chosen items, Recycle Bin).
@@ -193,6 +194,54 @@ disk, network and GPU rates from PDH counters added by English name; GPU names f
 display-adapter registry key; NVIDIA details by running `nvidia-smi` (hidden window, 2 s
 timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
 
+### Distribution, self-update and self-removal
+
+- **Release pipeline** (`.github/workflows/release.yml`): only a pushed `v*` tag publishes.
+  The build job has read-only permissions, runs vet and tests, builds `windows/amd64` and
+  `windows/arm64` with `-trimpath` and stamped version, commit, date and repository, checks
+  the stamp, and writes `SHA256SUMS`. A separate publish job (`contents: write`,
+  `id-token: write`, `attestations: write`) re-verifies the checksums, attests every file in
+  `SHA256SUMS`, and only then creates the release. Manual runs build and checksum but never
+  attest or publish. Untrusted inputs (tag name, dispatch input) reach scripts through
+  environment variables and are validated as semantic versions.
+- **Installer** (`scripts/install.ps1`): no administrator rights; downloads into memory and
+  checks size and SHA-256 against `SHA256SUMS` before writing anything; a missing checksum
+  file, a missing entry or a mismatch stops it (no fallback). It writes only
+  `%LOCALAPPDATA%\Programs\oow` (resolved through the Known Folder API) and the user `Path`
+  value, appending its folder only if missing and keeping the value's type. The only file it
+  replaces is an earlier `oow.exe` in that folder, which is first renamed to `oow.exe.old`
+  (possible even while it runs; `oow` removes it on its next start); it deletes nothing else.
+- **`oow update`** runs only when asked. It queries `releases/latest` over HTTPS (redirects to
+  plain HTTP are refused), refuses development builds and package-managed installs (winget,
+  Scoop, Chocolatey: detected from the executable's path, the user is given the manager's
+  command), and selects exactly `oow-<version>-windows-<GOARCH>.exe`. The download is capped
+  (256 MiB and the size GitHub lists), hashed while streaming, written next to the executable
+  as `oow.exe.new` with exclusive create, and hashed again from disk; any failure removes the
+  staged file through the verified sink and changes nothing else. The executable is then
+  renamed to `oow.exe.old` and the new file moved in, with renames that never overwrite; if the
+  second move fails the first is undone. `oow.exe.old` is removed at the next start through
+  `RemoveVerified` with an exact final-path check (never a folder or link). There is no
+  environment variable that changes where updates come from; tests point the client at a
+  local server through a test-only hook. `GITHUB_TOKEN`/`GH_TOKEN` is optional, sent only to
+  the API host (Go's client drops it on the redirect to GitHub's storage host; tested), and
+  never printed.
+- **`oow remove`** lists every item and needs confirmation or `--yes`. It removes the user
+  `Path` entries equal to `%LOCALAPPDATA%\Programs\oow` (variables expanded for comparison
+  only; other entries kept byte for byte; the value is re-read before writing and the write
+  is refused if it changed), then broadcasts `WM_SETTINGCHANGE`. It moves the config and data
+  folders to the Recycle Bin through `RecycleVerified` with `PurposeSelfRemove`: the guard
+  allows exactly one of the tool's own folders, never a parent or child, and never one that is
+  critical, whitelisted (or contains a whitelisted path), sensitive, in a system tree or in
+  user content. Folders chosen with `OOW_CONFIG_DIR`/`OOW_DATA_DIR`, or not at the Known
+  Folder location, are kept. The executable is removed only when it is exactly
+  `%LOCALAPPDATA%\Programs\oow\oow.exe`, never elsewhere (a source build is reported and kept);
+  because the running program cannot delete itself, `oow remove` uses no self-deletion
+  technique and prints the command to run after exit. Package-managed installs are refused
+  with the manager's uninstall command. The log file is closed before its folder is moved,
+  and the run is recorded in history only when the history is kept (`--keep-data`).
+- **Registry writes**: the user `Path` value (`HKCU\Environment`) is the only value written,
+  only by `oow remove`, only to drop the installer's entry.
+
 ### Tool-owned and whitelisted locations
 
 `oow`'s own config and data directories, and every path in the user's whitelist, are
@@ -250,7 +299,9 @@ protected together with their ancestors (deleting a parent would delete them).
   rule IDs; they never record file contents.
 - History records counts, bytes and skip reasons per target, not file lists.
 - JSON output includes full paths only with `--details`.
-- No data leaves the machine: there is no network code.
+- No data leaves the machine. The only network access is `oow update`, on explicit request:
+  it reads release metadata and downloads release files from GitHub, sending nothing but the
+  request itself (and `GITHUB_TOKEN`/`GH_TOKEN`, when set, to the GitHub API only).
 
 ## Dry run, confirmation and audit logging
 
@@ -306,6 +357,12 @@ protected together with their ancestors (deleting a parent would delete them).
 | Analyzer Recycle Bin guard (user files yes; system, sensitive, folder roots, junctions no) | `internal/cli` `TestRecyclePathsGuard` |
 | Explorer navigation, confirmation, size updates | `internal/ui/explorer_test.go` |
 | End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin, uninstall of a registered app with leftovers) |
+| Self-update: version ordering, dev builds, `SHA256SUMS` parsing, missing file or entry, mismatch, wrong size, asset per architecture, token only to the API and not across redirects, staging, replace, rollback, never overwriting | `internal/selfupdate/selfupdate_test.go` |
+| `update` CLI: newer/same/older, dry run zero-write, confirmation, fail closed, dev build, package manager | `internal/cli/update_test.go` |
+| Self-remove guard purpose (exact own folder only; whitelist, sensitive, system, user content, critical refused) | `internal/safety` `TestSelfRemovePurpose` |
+| `remove` CLI: dry run, confirmation, PATH entry only, Recycle Bin, `--keep-data`, whitelist, package manager, copies outside the install folder, running executable | `internal/cli/remove_test.go`, `TestRemoveRunningExecutableNeedsAManualStep` |
+| PATH editing, package-manager detection, verified executable and folder removal, links refused | `internal/install/install_test.go` |
+| PowerShell scripts parse in PowerShell 7 and 5.1 | `.github/workflows/ci.yml` |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.
@@ -318,8 +375,20 @@ developer's real system.
   that also restores both timestamps would pass the identity check (the final-path and guard
   checks still apply).
 - Free-space deltas are approximate when other programs write concurrently.
-- No releases exist yet. Planned: signed binaries, SHA-256 checksums, build-provenance
-  attestations, and installers that verify and fail closed.
+- Releases carry SHA-256 checksums (`SHA256SUMS`) and build-provenance attestations, and the
+  installer and `oow update` verify the checksum and fail closed. The checksum file comes from
+  the same release, so it proves the download matches the release, not that the release is
+  authentic; the attestation proves that, but it is checked only by users
+  (`gh attestation verify`), not automatically (that needs a Sigstore client). Binaries are
+  not Authenticode-signed yet (no certificate). Attestations need a public repository (or
+  GitHub Enterprise Cloud); until then a tag push fails at the attestation step, before
+  anything is published.
+- Microsoft Defender's machine-learning detection may flag `oow.exe` (and its test binaries)
+  as an information stealer: the binary names credential stores, wallets and key files in
+  order to protect them. It is a false positive; signing and submissions to Microsoft are the
+  planned fixes.
+- A running program cannot delete its own file on Windows, so `oow remove` leaves `oow.exe`
+  and prints the exact command that removes it (and its empty folder) after exit.
 - Cache locations of third-party apps are taken from their documented or long-standing
   layouts; when an app changes its layout the rule finds nothing (it never widens).
 - Vendor uninstallers are third-party programs: `oow` controls when they run and verifies the

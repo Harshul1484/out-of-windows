@@ -83,8 +83,20 @@ before the next begins.
 - [ ] `oow purge`: node_modules, target, build, .next, .venv… with project/Git safety rules
 - [ ] `oow installer`: identifiable installer packages in Downloads/Desktop/…
 
-## Phase 8 — Distribution
+## Phase 8 — Distribution ✅
 
-- [ ] Release builds with version metadata and signing
-- [ ] PowerShell installer, winget, Scoop, Chocolatey
-- [ ] `oow update`, `oow remove`
+- [x] Tag-driven release pipeline: windows/amd64 and windows/arm64 builds with `-trimpath`
+      and version metadata (version, commit, date), zip and raw exe per architecture,
+      `SHA256SUMS`, build-provenance attestations, GitHub release with notes; manual runs are
+      dry runs that never publish
+- [x] PowerShell installer (`irm … | iex`) and Command Prompt wrapper: per-user, no admin,
+      SHA-256 verified before anything is written, fails closed, user PATH only if missing
+- [x] `oow update`: explicit only, semantic version comparison, SHA-256 from `SHA256SUMS`
+      (fails closed), rename-aside replacement with rollback, `.old` removed on the next start,
+      defers to winget/Scoop/Chocolatey, `GITHUB_TOKEN`/`GH_TOKEN` for private repositories
+- [x] `oow remove`: program (installer folder only), user PATH entry, settings and history to
+      the Recycle Bin (`--keep-data` to keep them); defers to package managers
+- [x] winget, Scoop and Chocolatey templates (not published until the name is final)
+- Not yet: Authenticode signing (needs a certificate) and automatic attestation checks in
+  `oow update` (needs a Sigstore client); a running `oow.exe` cannot delete itself, so
+  `oow remove` prints the final command
