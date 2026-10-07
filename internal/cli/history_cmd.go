@@ -44,6 +44,9 @@ func newHistoryCmd(app *App) *cobra.Command {
 					lastDay = day
 				}
 				status := ui.Muted.Render(ui.Plural(r.Removed, "item", "items"))
+				if len(r.Changes) > 0 {
+					status = ui.Muted.Render(ui.Plural(changedCount(r.Changes), "change", "changes"))
+				}
 				if r.Errors > 0 {
 					status += " " + ui.Err.Render(ui.Plural(r.Errors, "error", "errors"))
 				}
@@ -62,6 +65,17 @@ func newHistoryCmd(app *App) *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 50, "maximum number of records (0 = all)")
 	return cmd
+}
+
+// changedCount counts the changes that took effect.
+func changedCount(cs []history.Change) int {
+	n := 0
+	for _, c := range cs {
+		if c.Status == "changed" {
+			n++
+		}
+	}
+	return n
 }
 
 func dayLabel(t, now time.Time) string {

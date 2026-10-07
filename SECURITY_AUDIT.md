@@ -239,8 +239,59 @@ timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
   technique and prints the command to run after exit. Package-managed installs are refused
   with the manager's uninstall command. The log file is closed before its folder is moved,
   and the run is recorded in history only when the history is kept (`--keep-data`).
-- **Registry writes**: the user `Path` value (`HKCU\Environment`) is the only value written,
-  only by `oow remove`, only to drop the installer's entry.
+- **Registry writes**: `oow update` writes none; `oow remove` writes only the user `Path`
+  value (`HKCU\Environment`), only to drop the installer's entry. The other reviewed registry
+  writes (StartupApproved values, user `Path` repair) are described in the next section.
+
+### Startup, doctor, optimize and repair (Phase 6)
+
+These commands delete no user files. What each one may change, and how:
+
+- **`doctor` only reads.** Registry values (restart flags, `wuauserv` start type, Windows Update
+  policy and pause times), `GetDiskFreeSpaceEx`, `GetAdaptersAddresses` (local adapter
+  configuration; nothing is sent), `exec.LookPath` for package managers, a read-only cleanup scan,
+  and folder write access checked by opening the folder with `FILE_ADD_FILE |
+  FILE_ADD_SUBDIRECTORY` and closing it (no file is created; backup privileges are not enabled,
+  so ACLs apply). Facts that cannot be read are reported as unknown, never as fine.
+- **`startup` writes only StartupApproved values** (`HKCU|HKLM\...\Explorer\StartupApproved\Run`,
+  `Run32`, `StartupFolder`), the mechanism Task Manager uses: `02 00 00 00` + zero FILETIME to
+  enable, `03 00 00 00` + FILETIME to disable. Run/RunOnce values and Startup folder files are
+  never edited or deleted, so every change is reversible (`oow startup enable`), and the previous
+  value is recorded in history. RunOnce entries are not toggled. The entry is re-checked to still
+  exist immediately before the write, the value is read back, and the new state is verified by
+  listing again. HKLM keys are opened in the 64-bit view explicitly. Machine-wide entries are
+  skipped with "requires administrator" unless elevated (interactively, an elevated window is
+  offered). A program is called missing only after a verified "not found" on a fixed drive: bare
+  names resolved through PATH, UNC paths, removable or disconnected drives and unreadable
+  shortcuts are "unknown", so nothing is offered for repair on a guess.
+- **Shortcut parsing** (`startup.ParseLink`, MS-SHLLINK) reads at most 1 MiB, bounds-checks every
+  offset and count, and returns an error instead of panicking (fuzzed: `FuzzParseLink`). ANSI
+  strings are decoded with the system code page, never guessed.
+- **`optimize` runs only owner interfaces**, each only after confirmation (`--yes` for scripts):
+  `DnsFlushResolverCache` (dnsapi), `Delete-DeliveryOptimizationCache -Force` (pinned files kept;
+  this is the reviewed owner-tool path for the Delivery Optimization cache, which `oow` never
+  deletes itself), and `Optimize-Volume -DriveLetter X -ReTrim` on fixed NTFS/ReFS volumes whose
+  device reports no seek penalty and TRIM support (`IOCTL_STORAGE_QUERY_PROPERTY` on a handle opened
+  with no access rights). PowerShell is started from System32 by full path, hidden, with fixed
+  scripts (drive letters validated as `^[A-Z]:\\$`) and timeouts. The cache size is measured
+  read-only before and after (links not followed). The admin tasks are skipped without elevation.
+  Pending restarts, update state and low disk space are shown for information only; `oow` never
+  restarts Windows, resets networking, restarts Explorer, edits update settings or tweaks the
+  registry.
+- **`repair` changes only user-level state.** User PATH (`HKCU\Environment\Path`): only missing,
+  duplicate and empty entries the user confirmed (or the preselected ones with `--yes`) are
+  removed; order, spelling, unexpanded variables and the value type are preserved; values with
+  quoted entries are never rewritten; missing folders inside the profile are not preselected.
+  Before writing, the previous value is saved as a `.reg` file in `<data dir>\backups` (written to
+  a temporary file, renamed without overwriting, read back and parsed), and the write is a
+  compare-and-swap against the analyzed value (a concurrent change aborts with nothing written).
+  The value is read back after writing, `WM_SETTINGCHANGE("Environment")` is broadcast with
+  `SendMessageTimeout`, and the backup path is recorded in history. The machine PATH is never
+  written, only reported. Broken startup entries are disabled through the same StartupApproved
+  path as `oow startup disable`.
+- **Sandbox mode** replaces every one of these with simulations under `<sandbox>\registry`
+  (startup values, PATH values, system facts, task state); the simulated Delivery Optimization
+  cache is emptied through `filesystem.RemoveVerified`, confined to the cache folder and the fence.
 
 ### Tool-owned and whitelisted locations
 
@@ -363,6 +414,15 @@ protected together with their ancestors (deleting a parent would delete them).
 | `remove` CLI: dry run, confirmation, PATH entry only, Recycle Bin, `--keep-data`, whitelist, package manager, copies outside the install folder, running executable | `internal/cli/remove_test.go`, `TestRemoveRunningExecutableNeedsAManualStep` |
 | PATH editing, package-manager detection, verified executable and folder removal, links refused | `internal/install/install_test.go` |
 | PowerShell scripts parse in PowerShell 7 and 5.1 | `.github/workflows/ci.yml` |
+| StartupApproved byte semantics, target resolution (missing vs unknown), admin and RunOnce refusals, verified writes | `internal/startup/startup_test.go` (`TestParseApproval`, `TestApprovalDataMatchesTaskManager`, `TestCommandTarget`, `TestSetEnabled`, `TestSetEnabledVerifiesAndReportsFailures`) |
+| Shortcut parser bounds | `internal/startup/lnk_test.go` (`TestParseLinkRejectsMalformed`, `FuzzParseLink`) |
+| PATH analysis, exact removal, `.reg` backup round trip, no-overwrite backups | `internal/envpath/envpath_test.go` |
+| Repair: preselection, backup before write, compare-and-swap, machine PATH untouched, cancellation | `internal/repair/repair_test.go` |
+| Doctor never reports unreadable facts as ok; thresholds | `internal/doctor/doctor_test.go` |
+| Optimize: admin tasks skipped without elevation, only ready tasks run, cancellation | `internal/optimize/optimize_test.go` |
+| Write-access probe creates nothing | `internal/system/probe_test.go` `TestCanCreateInDoesNotWrite` |
+| Startup/doctor/optimize/repair CLI: dry run and doctor change nothing, exit 4 without `--yes`, `OOW_DRY_RUN`, history | `internal/cli/system6_test.go` |
+| Real StartupApproved write/read-back, `.lnk` parsing of Shell-made shortcuts, user PATH repair with backup (CI only) | `scripts/ci/e2e-real.ps1` (startup, doctor, optimize, repair group) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.

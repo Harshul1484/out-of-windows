@@ -72,11 +72,24 @@ before the next begins.
 - [x] Native sources only (kernel process table, PDH English counter names, Known APIs);
       unavailable metrics are reported as unavailable, never estimated
 
-## Phase 6 — Optimize, doctor, startup
+## Phase 6 — Optimize, doctor, startup ✅
 
-- [ ] `oow optimize`: bounded, explained maintenance (DNS flush, caches, pending reboot…)
-- [ ] `oow doctor`: diagnostics without automatic fixes
-- [ ] `oow startup`: Run keys, Startup folders, scheduled tasks; safe disable
+- [x] `oow startup`: Run and RunOnce values (HKCU, HKLM 64- and 32-bit), user and common Startup
+      folders with `.lnk` targets resolved; enabled/disabled state and broken programs; interactive
+      toggle and `startup enable|disable` through StartupApproved, like Task Manager (reversible,
+      entries never deleted; machine-wide entries need administrator rights)
+- [x] `oow doctor`: free space per fixed drive, pending restart, Windows Update service and policy,
+      user and system PATH, broken startup entries, reclaimable caches, network configuration
+      (local only), folder permissions, package managers; diagnose only, with next steps
+- [x] `oow optimize`: DNS resolver cache flush, Delivery Optimization cache (owner cmdlet, measured
+      before and after), SSD retrim (TRIM-capable fixed SSDs); pending restart, update state and
+      disk pressure shown for information only
+- [x] `oow repair`: user PATH (missing, duplicate, empty entries; `.reg` backup first) and broken
+      startup entries; the system PATH is reported, never changed
+- Not planned: winsock or network stack resets, restarting Explorer, Windows Update cache
+  deletion, registry tweaks
+- Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API);
+  the Windows Update download cache and component store through owner tools
 
 ## Phase 7 — Developer tools
 

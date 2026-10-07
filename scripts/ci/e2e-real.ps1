@@ -216,6 +216,130 @@ $ps = & $Oow processes --json --sort memory | ConvertFrom-Json
 if ($ps.schema -ne 'oow.processes/v1' -or $ps.total -lt 10) { throw 'processes JSON incomplete' }
 Write-Host '::endgroup::'
 
+Write-Host '::group::startup, doctor, optimize, repair (only entries this section creates are changed)'
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+$approvedFolderKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder'
+$startupDir = [Environment]::GetFolderPath('Startup')
+$cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+$ciPathDir = Join-Path $env:LOCALAPPDATA 'OOW CI PathDir'
+$ciMissingDir = 'C:\OOW-CI-missing-path\bin'
+New-Item -ItemType Directory -Force -Path $ciPathDir | Out-Null
+
+function Get-Approval([string] $key, [string] $name) {
+  $k = Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
+  if ($k) { return $k.GetValue($name) } else { return $null }
+}
+function Get-ApprovalSnapshot {
+  $out = @{}
+  foreach ($key in $approvedKey, $approvedFolderKey) {
+    $k = Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
+    if (-not $k) { continue }
+    foreach ($n in $k.GetValueNames()) { $out["$key|$n"] = (($k.GetValue($n) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  }
+  return $out
+}
+$envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+$machineEnv = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment')
+$origPath = $envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+$origKind = if ($null -ne $origPath) { $envKey.GetValueKind('Path') } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+$machinePathBefore = $machineEnv.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+$otherApprovals = Get-ApprovalSnapshot
+
+# Entries created by this section: one whose program exists, one whose
+# program is gone, and two Shell-made shortcuts (one broken).
+New-ItemProperty -Path $runKey -Name 'OOW CI Present' -Value "`"$cmdExe`" /c exit" -Force | Out-Null
+New-ItemProperty -Path $runKey -Name 'OOW CI Gone' -Value '"C:\OOW-CI-missing\gone.exe" /background' -Force | Out-Null
+$shell = New-Object -ComObject WScript.Shell
+# The broken shortcut's program exists while the Shell creates the link (so
+# the link records its path, as for a real install) and is removed after.
+New-File 'C:\OOW-CI-missing\tool.exe' 100
+foreach ($l in @(@('OOW CI Shortcut.lnk', $cmdExe), @('OOW CI Broken.lnk', 'C:\OOW-CI-missing\tool.exe'))) {
+  $s = $shell.CreateShortcut((Join-Path $startupDir $l[0])); $s.TargetPath = $l[1]; $s.Arguments = '/c exit'; $s.Save()
+}
+Remove-Item -LiteralPath 'C:\OOW-CI-missing' -Recurse -Force
+try {
+  $doc = & $Oow doctor --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $doc.schema -ne 'oow.doctor/v1' -or $doc.checks.Count -lt 10) { throw 'doctor JSON incomplete' }
+  $doc.checks | Format-Table id, status, summary -AutoSize | Out-String -Width 200 | Write-Host
+  & $Oow doctor
+  if ($LASTEXITCODE -ne 0) { throw "doctor exited $LASTEXITCODE" }
+
+  $opt = & $Oow optimize --dry-run --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $opt.schema -ne 'oow.optimize/v1' -or $opt.tasks.Count -ne 3 -or $null -ne $opt.results) { throw 'optimize dry run JSON is wrong' }
+  $opt.tasks | Format-Table @{n = 'task'; e = { $_.task.id } }, status, reason, bytes_before -AutoSize | Out-String -Width 200 | Write-Host
+  & $Oow optimize | Out-Null
+  if ($LASTEXITCODE -ne 4) { throw "optimize without --yes exited $LASTEXITCODE, expected 4" }
+
+  $st = & $Oow startup --json | ConvertFrom-Json
+  $byName = @{}; foreach ($e in $st.entries) { $byName[$e.name] = $e }
+  $st.entries | Format-Table id, state, target_state, target -AutoSize | Out-String -Width 250 | Write-Host
+  if ($byName['OOW CI Present'].target_state -ne 'found' -or $byName['OOW CI Gone'].target_state -ne 'missing') { throw 'Run entries resolved wrongly' }
+  if ($byName['OOW CI Shortcut.lnk'].target -ne $cmdExe -or $byName['OOW CI Shortcut.lnk'].target_state -ne 'found') { throw "Shell shortcut not parsed: $($byName['OOW CI Shortcut.lnk'] | ConvertTo-Json -Compress)" }
+  if ($byName['OOW CI Broken.lnk'].target_state -ne 'missing') { throw 'broken shortcut not detected' }
+
+  $dry = & $Oow startup disable 'OOW CI Present' --dry-run --json | ConvertFrom-Json
+  if ($dry.results[0].status -ne 'planned' -or $null -ne (Get-Approval $approvedKey 'OOW CI Present')) { throw 'startup dry run wrote a value' }
+  & $Oow startup disable 'OOW CI Present' | Out-Null
+  if ($LASTEXITCODE -ne 4) { throw "startup disable without --yes exited $LASTEXITCODE" }
+  $off = & $Oow startup disable 'OOW CI Present' --yes --json | ConvertFrom-Json
+  $bytes = Get-Approval $approvedKey 'OOW CI Present'
+  if ($off.results[0].status -ne 'changed' -or $bytes.Count -ne 12 -or $bytes[0] -ne 3) { throw "disable did not write 03...: $($bytes -join ',')" }
+  if (-not (Get-ItemProperty -Path $runKey -Name 'OOW CI Present' -ErrorAction SilentlyContinue)) { throw 'the Run value was removed' }
+  $on = & $Oow startup enable 'OOW CI Present' --yes --json | ConvertFrom-Json
+  $bytes = Get-Approval $approvedKey 'OOW CI Present'
+  if ($on.results[0].status -ne 'changed' -or $bytes[0] -ne 2 -or ($bytes | Measure-Object -Sum).Sum -ne 2) { throw "enable did not write 02 00...: $($bytes -join ',')" }
+
+  # User PATH: one missing folder and a duplicate, created here.
+  $base = if ($null -eq $origPath -or $origPath -eq '') { '' } elseif ($origPath.EndsWith(';')) { $origPath } else { "$origPath;" }
+  $planted = "$base$ciMissingDir;$ciPathDir;$ciPathDir"
+  $envKey.SetValue('Path', $planted, $origKind)
+  $plan = & $Oow repair --dry-run --json | ConvertFrom-Json
+  $plan.fixes | Format-Table id, selected, title -AutoSize | Out-String -Width 250 | Write-Host
+  $ours = @($plan.fixes | Where-Object { $_.selected -and ($_.target -eq $ciMissingDir -or $_.target -eq $ciPathDir -or $_.target -like '*OOW CI Gone' -or $_.target -like '*OOW CI Broken.lnk') })
+  $others = @($plan.fixes | Where-Object { $_.selected } | Where-Object { $ours -notcontains $_ })
+  if ($ours.Count -ne 4) { throw "expected 4 preselected fixes for the planted problems, got $($ours.Count)" }
+  if ($envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') -ne $planted) { throw 'repair dry run changed the PATH' }
+  & $Oow repair | Out-Null
+  if ($LASTEXITCODE -ne 4) { throw "repair without --yes exited $LASTEXITCODE" }
+  if ($others.Count -gt 0) {
+    Write-Host "::warning::repair --yes skipped: the runner has its own preselected findings ($(($others | ForEach-Object id) -join ', '))"
+  } else {
+    $rep = & $Oow repair --yes --json | ConvertFrom-Json
+    $rep.outcome | ConvertTo-Json -Depth 5 | Write-Host
+    if ($LASTEXITCODE -ne 0 -or $rep.outcome.fixed -ne 4 -or $rep.outcome.failed -ne 0) { throw 'repair did not apply the 4 fixes' }
+    $after = $envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+    if ($after -ne "$base$ciPathDir") { throw "unexpected user PATH after repair: $after" }
+    if ($envKey.GetValueKind('Path') -ne $origKind) { throw 'repair changed the PATH value type' }
+    foreach ($a in @(@($approvedKey, 'OOW CI Gone'), @($approvedFolderKey, 'OOW CI Broken.lnk'))) {
+      $b = Get-Approval $a[0] $a[1]
+      if ($null -eq $b -or $b[0] -ne 3) { throw "$($a[1]) not disabled by repair" }
+    }
+    # The backup restores exactly the value before the repair.
+    if (-not (Test-Path -LiteralPath $rep.outcome.backup)) { throw 'no PATH backup' }
+    cmd /c "reg import `"$($rep.outcome.backup)`" >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) { throw "reg import of the backup exited $LASTEXITCODE" }
+    if ($envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') -ne $planted) { throw 'the .reg backup did not restore the previous PATH' }
+  }
+  if ($machineEnv.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') -ne $machinePathBefore) { throw 'the machine PATH changed' }
+  $now = Get-ApprovalSnapshot
+  foreach ($k in $otherApprovals.Keys) { if ($now[$k] -ne $otherApprovals[$k]) { throw "a StartupApproved value this test did not create changed: $k" } }
+} finally {
+  if ($null -eq $origPath) { $envKey.DeleteValue('Path', $false) } else { $envKey.SetValue('Path', $origPath, $origKind) }
+  foreach ($n in 'OOW CI Present', 'OOW CI Gone') {
+    Remove-ItemProperty -Path $runKey -Name $n -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $approvedKey -Name $n -ErrorAction SilentlyContinue
+  }
+  foreach ($n in 'OOW CI Shortcut.lnk', 'OOW CI Broken.lnk') {
+    Remove-Item -LiteralPath (Join-Path $startupDir $n) -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $approvedFolderKey -Name $n -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath $ciPathDir -Force -ErrorAction SilentlyContinue
+}
+if ($envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') -ne $origPath) { throw 'the original user PATH was not restored' }
+Assert-Canaries
+Write-Host '::endgroup::'
+
 Write-Host '::group::history'
 & $Oow history
 Write-Host '::endgroup::'

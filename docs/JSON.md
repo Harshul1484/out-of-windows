@@ -311,6 +311,136 @@ largest first, filtered by `--min-size`, at most `--top` entries.
 - `manual_steps` lists the commands that delete the running executable after `oow` exits.
 - `managed_by` is as in `oow.update/v1`; a package-managed install is not removed (exit 1).
 
+## `oow startup --json` — `oow.startup/v1`
+
+```json
+{
+  "schema": "oow.startup/v1", "sandbox": false, "elevated": false,
+  "entries": [
+    {
+      "id": "hkcu-run:Contoso Agent", "name": "Contoso Agent", "source": "hkcu-run",
+      "source_label": "Registry (this user)", "scope": "user",
+      "location": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "command": "\"C:\\Program Files\\Contoso\\Agent\\agent.exe\" --tray",
+      "target": "C:\\Program Files\\Contoso\\Agent\\agent.exe", "target_state": "found",
+      "state": "disabled", "disabled_at": "2026-09-01T08:00:00Z",
+      "approval": { "key": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run",
+                    "value": "Contoso Agent", "data": "03000000008005e3e739dd01" },
+      "toggleable": true, "needs_admin": false
+    }
+  ],
+  "summary": { "total": 12, "enabled": 9, "disabled": 2, "runs_once": 1, "broken": 3 },
+  "warnings": []
+}
+```
+
+- `id` is `<source>:<name>` and is what `startup enable|disable` accepts (besides names).
+  `source`: `hkcu-run`, `hkcu-runonce`, `hklm-run`, `hklm-run32`, `hklm-runonce`,
+  `hklm-runonce32`, `startup-folder`, `common-startup-folder`. `scope`: `user` or `machine`.
+- `location` is the registry key, or the file in the Startup folder. `command` is the Run value,
+  or a shortcut's target and arguments.
+- `target_state`: `found`, `missing`, or `unknown` (bare program names found through PATH at run
+  time, network and removable drives, shortcuts to shell items); `target_note` says why. Only a
+  verified `missing` makes an entry broken; `summary.broken` counts enabled broken entries.
+- `state`: `enabled`, `disabled` or `runs-once` (RunOnce: cannot be toggled). `approval` is the
+  StartupApproved value that holds the state; `data` is its hex bytes, `""` when absent (enabled).
+- `needs_admin`: the entry starts for all users, so changing it needs administrator rights.
+
+## `oow startup enable|disable --json` — `oow.startup-change/v1`
+
+`{"schema", "action": "enable"|"disable", "dry_run", "sandbox", "elevated", "results": [{"entry",
+"status", "reason", "before", "after"}]}` with `entry` as in `oow.startup/v1` (after the change).
+`status`: `planned` (dry run), `changed`, `unchanged` (already in that state), `skipped` (RunOnce,
+or needs administrator; see `reason`), `failed`. `before`/`after` are the approval values in hex.
+Exit code 1 when an entry was skipped or failed, 4 without `--yes` when not interactive.
+
+## `oow doctor --json` — `oow.doctor/v1`
+
+```json
+{
+  "schema": "oow.doctor/v1", "sandbox": false, "elevated": false,
+  "checks": [
+    { "id": "disk.free.d", "category": "storage", "title": "D:\\ free space", "status": "warning",
+      "summary": "6.0 GB free of 256.0 GB (2%)",
+      "details": ["Less than 10 GB or 10% free: updates and large downloads may fail soon."],
+      "next_step": "Run `oow clean` to remove temporary files and caches, or `oow analyze D:\\` to see what uses the space.",
+      "data": { "root": "D:\\", "free_bytes": 6442450944, "total_bytes": 274877906944 } }
+  ],
+  "summary": { "checks": 12, "issues": 5, "problems": 0, "warnings": 5, "ok": 7, "info": 0, "unknown": 0 }
+}
+```
+
+- `status`: `ok`, `warning`, `problem`, `info`, `unknown`. `issues` = `problems` + `warnings`;
+  `info` and `unknown` are not issues. A fact that cannot be read is `unknown`, never `ok`.
+- Check IDs: `disk.free.<letter>` (warning under 10 GB or 10% free, problem under 2 GB),
+  `cleanup.reclaimable`, `reboot.pending`, `windows-update`, `path.user`, `path.machine`,
+  `startup.broken`, `network`, `permissions.temp`, `permissions.data`, `package-managers`, and
+  `config` when `config.json` cannot be read. `data` holds the measured values of each check.
+- doctor exits 0 whatever it finds; it never changes anything.
+
+## `oow optimize --json` — `oow.optimize/v1`
+
+```json
+{
+  "schema": "oow.optimize/v1", "dry_run": true, "sandbox": false, "elevated": true,
+  "tasks": [
+    { "task": { "id": "optimize.delivery-optimization", "name": "Clear the Delivery Optimization cache",
+                "what": "...", "why": "...", "effect": "...", "requires_admin": true },
+      "status": "ready", "selected": true, "bytes_before": 5000000 },
+    { "task": { "id": "optimize.ssd-retrim", "...": "..." }, "status": "ready", "selected": true,
+      "volumes": [ { "root": "C:\\", "file_system": "NTFS" } ] }
+  ],
+  "notes": [ { "id": "reboot.pending", "status": "warning", "summary": "...", "next_step": "..." } ],
+  "results": [
+    { "id": "optimize.delivery-optimization", "name": "...", "status": "done", "message": "...",
+      "bytes_before": 5000000, "bytes_after": 0, "freed_bytes": 5000000, "duration_ms": 900 }
+  ]
+}
+```
+
+- Task IDs: `optimize.dns-flush`, `optimize.delivery-optimization`, `optimize.ssd-retrim`
+  (`--task` accepts them with or without the `optimize.` prefix).
+- `status`: `ready`, `needs-admin`, `not-applicable` (nothing to do), `unavailable` (this Windows
+  cannot run it); `reason` explains every status but `ready`. `bytes_before` is `-1` when the cache
+  cannot be measured (it is readable only by administrators).
+- `notes` are doctor checks shown for information only (`reboot.pending`, `windows-update`,
+  `disk.free.*` when not ok); optimize never acts on them.
+- `results` appears after a real run; `status` is `done`, `partial`, `failed` or `cancelled`.
+  Exit code 1 when a task failed or was partial.
+
+## `oow repair --json` — `oow.repair/v1`
+
+```json
+{
+  "schema": "oow.repair/v1", "dry_run": false, "sandbox": false, "elevated": false,
+  "fixes": [
+    { "id": "path.user:3", "kind": "user-path-entry", "title": "Remove missing C:\\Old\\bin from your PATH",
+      "target": "C:\\Old\\bin", "reason": "the folder does not exist", "selected": true, "needs_admin": false },
+    { "id": "path.user:2", "kind": "user-path-entry", "title": "...", "target": "%USERPROFILE%\\go\\bin",
+      "reason": "the folder does not exist", "selected": false,
+      "review": "it is inside your profile; tools often add a folder like this before creating it", "needs_admin": false },
+    { "id": "startup:hkcu-run:Fabrikam Updater", "kind": "startup-entry", "title": "Disable startup entry Fabrikam Updater",
+      "target": "hkcu-run:Fabrikam Updater", "reason": "its program is missing: C:\\...\\updater.exe",
+      "selected": true, "needs_admin": false }
+  ],
+  "not_fixed": ["The system PATH has 1 missing, 1 duplicate and 0 empty entries. ..."],
+  "outcome": { "results": [ { "fix": { "...": "..." }, "status": "fixed" } ],
+               "backup": "C:\\Users\\me\\AppData\\Local\\oow\\backups\\path-user-20261005-120000.reg",
+               "fixed": 2, "skipped": 0, "failed": 0 }
+}
+```
+
+- `selected` fixes are preselected; `--yes` applies exactly those. Unselected fixes carry
+  `review` (inside the profile, or needs administrator rights).
+- `outcome` appears after a real run. Fix `status`: `fixed`, `skipped` (with `reason`, e.g. the
+  PATH changed after it was checked), `failed`. `backup` is a `.reg` file that restores the
+  previous user PATH (double-click or `reg import`); `broadcast_error` is set when running programs
+  could not be notified.
+
+History records written by `startup`, `optimize` and `repair` carry
+`changes: [{"id", "name", "action", "status", "detail", "error"}]` (`action`: `disabled`,
+`enabled`, `ran`, `removed-path-entry`; `status`: `changed`, `skipped`, `failed`, `partial`).
+
 ## `oow config --json` — `oow.config/v1`
 
 `{"schema", "config_file", "data_dir", "sandbox", "config": {"version", "whitelist":
