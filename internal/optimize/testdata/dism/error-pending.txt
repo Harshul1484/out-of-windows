@@ -1,0 +1,13 @@
+
+Deployment Image Servicing and Management tool
+Version: 10.0.26100.1150
+
+Image Version: 10.0.26100.2033
+
+[==========================100.0%==========================]
+
+Error: 0x800f0806
+
+The operation could not be completed due to pending operations.
+
+The DISM log file can be found at C:\Windows\Logs\DISM\dism.log
