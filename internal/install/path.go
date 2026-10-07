@@ -2,22 +2,12 @@ package install
 
 import (
 	"errors"
+	"log/slog"
 	"strings"
 
+	"github.com/Harshul1484/out-of-windows/internal/envpath"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
 )
-
-// UserPath reads and writes the user's PATH variable, unexpanded.
-type UserPath interface {
-	// Get returns the raw value and whether it is stored as an expandable
-	// string (REG_EXPAND_SZ). A missing value is "" without error.
-	Get() (value string, expandable bool, err error)
-	// Set stores value with the given kind and tells running programs that
-	// the environment changed.
-	Set(value string, expandable bool) error
-	// Expand expands %VARIABLES% in one entry, for comparison only.
-	Expand(entry string) string
-}
 
 // ErrPathChanged means the user PATH changed between reading and writing.
 var ErrPathChanged = errors.New("the user PATH changed while it was being edited; run the command again")
@@ -66,23 +56,33 @@ func RemoveEntry(value, dir string, expand func(string) string) (string, int) {
 	return strings.Join(kept, ";"), removed
 }
 
-// RemoveFromUserPath removes dir from the user PATH. It re-reads the value
-// right before writing and refuses to write if it changed in between.
-func RemoveFromUserPath(up UserPath, dir string) (int, error) {
-	value, expandable, err := up.Get()
+// RemoveFromUserPath removes dir from the user PATH through store, the same
+// compare-and-swap writer `oow repair` uses: the value is written only if it
+// still equals what was read, and is read back afterwards.
+func RemoveFromUserPath(store envpath.Store, dir string) (int, error) {
+	cur, err := store.Read(envpath.User)
 	if err != nil {
 		return 0, err
 	}
-	next, n := RemoveEntry(value, dir, up.Expand)
+	if !cur.Exists {
+		return 0, nil
+	}
+	expand := func(s string) string { x, _ := store.Expand(s); return x }
+	next, n := RemoveEntry(cur.Raw, dir, expand)
 	if n == 0 {
 		return 0, nil
 	}
-	again, againExpandable, err := up.Get()
+	err = store.WriteUser(cur, envpath.Value{Raw: next, Expand: cur.Expand, Exists: true})
+	if errors.Is(err, envpath.ErrChanged) {
+		return 0, ErrPathChanged
+	}
 	if err != nil {
 		return 0, err
 	}
-	if again != value || againExpandable != expandable {
-		return 0, ErrPathChanged
+	// The PATH is already changed; a window that does not answer the
+	// broadcast only delays when new terminals see it.
+	if err := store.Broadcast(); err != nil {
+		slog.Warn("environment change not broadcast", "err", err)
 	}
-	return n, up.Set(next, expandable)
+	return n, nil
 }

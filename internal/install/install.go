@@ -3,8 +3,8 @@
 // executable instead, and the user PATH entry the installer adds.
 //
 // It decides; it does not delete. Removals go through the verified sinks in
-// internal/filesystem, and PATH changes through a UserPath implementation
-// (the registry on a real system, a file in sandbox mode).
+// internal/filesystem, and PATH changes through an envpath.Store (the
+// registry on a real system, a file in sandbox mode).
 package install
 
 import (

@@ -137,9 +137,10 @@ arrives.
   semantic versions, `SHA256SUMS` verification (fail closed), staging, rename-aside
   replacement with rollback, `.old` cleanup at start-up.
 - `internal/install/`: how `oow` is installed: the installer folder
-  (`%LOCALAPPDATA%\Programs\oow`), package-manager detection (winget, Scoop, Chocolatey), user
-  PATH editing (`UserPath`: registry, or a file in the sandbox), and executable removal through
-  the verified sink (`ExeRemover`; the running program is never deleted).
+  (`%LOCALAPPDATA%\Programs\oow`), package-manager detection (winget, Scoop, Chocolatey), the
+  installer's PATH entry (removed through `envpath.Store`, the same compare-and-swap writer
+  `repair` uses), and executable removal through the verified sink (`ExeRemover`; the running
+  program is never deleted).
 - `internal/sandbox/`: simulated Windows layout and seed data for safe end-to-end runs.
 - `internal/testutil/`: test sandbox, deletion fence setup, fixtures, file locking.
 - `docs/SAFETY.md`: the safety model (design contract). `docs/ARCHITECTURE.md`,

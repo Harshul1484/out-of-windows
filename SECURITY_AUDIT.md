@@ -227,8 +227,9 @@ timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
   never printed.
 - **`oow remove`** lists every item and needs confirmation or `--yes`. It removes the user
   `Path` entries equal to `%LOCALAPPDATA%\Programs\oow` (variables expanded for comparison
-  only; other entries kept byte for byte; the value is re-read before writing and the write
-  is refused if it changed), then broadcasts `WM_SETTINGCHANGE`. It moves the config and data
+  only; other entries kept byte for byte; the write goes through `envpath.Store`, the same
+  compare-and-swap writer as `repair`: it is refused if the value changed since it was read,
+  and the value is read back afterwards), then broadcasts `WM_SETTINGCHANGE`. It moves the config and data
   folders to the Recycle Bin through `RecycleVerified` with `PurposeSelfRemove`: the guard
   allows exactly one of the tool's own folders, never a parent or child, and never one that is
   critical, whitelisted (or contains a whitelisted path), sensitive, in a system tree or in

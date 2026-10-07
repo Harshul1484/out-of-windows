@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Harshul1484/out-of-windows/internal/cli"
+	"github.com/Harshul1484/out-of-windows/internal/envpath"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 )
@@ -61,11 +62,11 @@ func newRemoveEnv(t *testing.T) *env {
 
 func (e *env) userPath() string {
 	e.t.Helper()
-	v, _, err := sandbox.UserPath{Root: e.root}.Get()
+	v, err := sandbox.Paths{Root: e.root}.Read(envpath.User)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return v
+	return v.Raw
 }
 
 func (e *env) dataDir() string { return sandbox.DataDir(e.root) }
@@ -109,6 +110,10 @@ func TestRemoveYesRemovesEverythingItInstalled(t *testing.T) {
 	e := newRemoveEnv(t)
 	binDir := filepath.Join(sandbox.RecycleBinDir(e.root), "S-1-5-21-sandbox")
 	binBefore, _ := os.ReadDir(binDir)
+	pathBefore := e.userPath()
+	if !strings.HasSuffix(pathBefore, ";"+sandbox.InstallPathEntry) {
+		t.Fatalf("seeded user PATH = %q, want the installer's entry last", pathBefore)
+	}
 	out, _, code := e.run("remove", "--yes", "--json")
 	if code != 0 {
 		t.Fatalf("code = %d\n%s", code, out)
@@ -128,8 +133,10 @@ func TestRemoveYesRemovesEverythingItInstalled(t *testing.T) {
 	if !e.exists(`C\Users\sandbox\AppData\Local\Programs`) {
 		t.Error("removed the Programs folder itself")
 	}
-	if got := e.userPath(); got != `C:\Tools\bin;%USERPROFILE%\go\bin` {
-		t.Errorf("user PATH = %q, want the other entries unchanged", got)
+	// Only the installer's entry goes; every other entry (unexpanded
+	// variables, a duplicate, an undefined %TOOLS_HOME%) stays byte for byte.
+	if got, want := e.userPath(), strings.TrimSuffix(pathBefore, ";"+sandbox.InstallPathEntry); got != want {
+		t.Errorf("user PATH = %q, want %q", got, want)
 	}
 	if _, err := os.Stat(e.dataDir()); !os.IsNotExist(err) {
 		t.Error("data folder not moved")

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Harshul1484/out-of-windows/internal/envpath"
 	"github.com/Harshul1484/out-of-windows/internal/install"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 )
@@ -99,39 +100,61 @@ func TestRemoveEntryKeepsEverythingElse(t *testing.T) {
 	}
 }
 
+// fakePath is an envpath.Store holding only the user PATH.
 type fakePath struct {
-	value      string
-	expandable bool
-	gets       int
-	changeOn   int // change the value on this Get call
-	set        []string
+	user        envpath.Value
+	changeFirst bool // another program edits the value just before the write
+	writes      []envpath.Value
+	broadcasts  int
 }
 
-func (f *fakePath) Get() (string, bool, error) {
-	f.gets++
-	if f.gets == f.changeOn {
-		f.value += `;C:\New`
+func (f *fakePath) Read(scope envpath.Scope) (envpath.Value, error) {
+	if scope != envpath.User {
+		return envpath.Value{}, errors.New("only the user PATH is expected")
 	}
-	return f.value, f.expandable, nil
+	return f.user, nil
 }
-func (f *fakePath) Set(v string, e bool) error { f.set = append(f.set, v); f.value = v; return nil }
-func (f *fakePath) Expand(s string) string     { return s }
+
+func (f *fakePath) WriteUser(expected, updated envpath.Value) error {
+	if f.changeFirst {
+		f.user.Raw += `;C:\New`
+	}
+	if f.user != expected {
+		return envpath.ErrChanged
+	}
+	f.writes = append(f.writes, updated)
+	f.user = updated
+	return nil
+}
+
+func (f *fakePath) Broadcast() error               { f.broadcasts++; return nil }
+func (f *fakePath) Expand(s string) (string, bool) { return s, true }
 
 func TestRemoveFromUserPath(t *testing.T) {
 	dir := `C:\P\oow`
-	fp := &fakePath{value: `C:\A;C:\P\oow;C:\B`, expandable: true}
-	if n, err := install.RemoveFromUserPath(fp, dir); err != nil || n != 1 || fp.value != `C:\A;C:\B` {
-		t.Fatalf("n=%d err=%v value=%q", n, err, fp.value)
+	fp := &fakePath{user: envpath.Value{Raw: `C:\A;C:\P\oow;C:\B`, Expand: true, Exists: true}}
+	if n, err := install.RemoveFromUserPath(fp, dir); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
-	// Nothing to do: no write at all.
-	fp = &fakePath{value: `C:\A`}
-	if n, err := install.RemoveFromUserPath(fp, dir); err != nil || n != 0 || len(fp.set) != 0 {
-		t.Errorf("no entry: n=%d err=%v writes=%d", n, err, len(fp.set))
+	if want := (envpath.Value{Raw: `C:\A;C:\B`, Expand: true, Exists: true}); fp.user != want || fp.broadcasts != 1 {
+		t.Fatalf("value = %+v (want %+v), broadcasts = %d", fp.user, want, fp.broadcasts)
+	}
+	// The value type is kept (REG_SZ stays REG_SZ).
+	fp = &fakePath{user: envpath.Value{Raw: `C:\P\oow\;C:\A`, Exists: true}}
+	if n, err := install.RemoveFromUserPath(fp, dir); err != nil || n != 1 || fp.user.Expand || fp.user.Raw != `C:\A` {
+		t.Errorf("REG_SZ: n=%d err=%v value=%+v", n, err, fp.user)
+	}
+	// Nothing to do, or no PATH at all: no write and no broadcast.
+	for _, v := range []envpath.Value{{Raw: `C:\A`, Exists: true}, {}} {
+		fp = &fakePath{user: v}
+		if n, err := install.RemoveFromUserPath(fp, dir); err != nil || n != 0 || len(fp.writes) != 0 || fp.broadcasts != 0 {
+			t.Errorf("%+v: n=%d err=%v writes=%d broadcasts=%d", v, n, err, len(fp.writes), fp.broadcasts)
+		}
 	}
 	// A concurrent change between read and write is never overwritten.
-	fp = &fakePath{value: `C:\A;C:\P\oow`, changeOn: 2}
-	if _, err := install.RemoveFromUserPath(fp, dir); !errors.Is(err, install.ErrPathChanged) || len(fp.set) != 0 {
-		t.Errorf("concurrent change: err=%v writes=%d", err, len(fp.set))
+	fp = &fakePath{user: envpath.Value{Raw: `C:\A;C:\P\oow`, Exists: true}, changeFirst: true}
+	if _, err := install.RemoveFromUserPath(fp, dir); !errors.Is(err, install.ErrPathChanged) || len(fp.writes) != 0 || fp.broadcasts != 0 {
+		t.Errorf("concurrent change: err=%v writes=%d broadcasts=%d", err, len(fp.writes), fp.broadcasts)
 	}
 }
 

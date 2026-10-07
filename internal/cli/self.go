@@ -60,13 +60,6 @@ func managedBy(s selfInfo) install.Managed {
 // %LOCALAPPDATA% (or the sandbox).
 func (a *App) installDir() string { return install.Dir(a.Locations.LocalAppData) }
 
-func (a *App) userPath() install.UserPath {
-	if a.Sandbox != "" {
-		return sandbox.UserPath{Root: a.Sandbox}
-	}
-	return install.SystemUserPath{}
-}
-
 // exeRemover removes the installed executable. The running program cannot
 // delete its own file, so on a real system the user gets the command to run
 // after exit instead.

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
+	"github.com/Harshul1484/out-of-windows/internal/envpath"
 	"github.com/Harshul1484/out-of-windows/internal/filesystem"
 	"github.com/Harshul1484/out-of-windows/internal/history"
 	"github.com/Harshul1484/out-of-windows/internal/install"
@@ -244,11 +245,11 @@ func planRemove(app *App, self selfInfo, o removeOptions) []removeItemJSON {
 	}
 
 	// The user PATH entry the installer added.
-	up := app.userPath()
-	if value, _, err := up.Get(); err != nil {
+	store := app.pathStore()
+	if value, err := store.Read(envpath.User); err != nil {
 		items = append(items, removeItemJSON{Kind: kindPathEntry, Path: dir, Action: actKeep, Status: stFailed,
 			Reason: "cannot read the user PATH: " + err.Error()})
-	} else if install.HasEntry(value, dir, up.Expand) {
+	} else if install.HasEntry(value.Raw, dir, func(s string) string { x, _ := store.Expand(s); return x }) {
 		it := removeItemJSON{Kind: kindPathEntry, Path: dir, Action: actPath, Status: stPlanned}
 		if installed && !inDir {
 			it.Action, it.Status = actKeep, stKept
@@ -301,7 +302,7 @@ func executeRemove(app *App, self selfInfo, items []removeItemJSON) (dataRemoved
 	fail := func(it *removeItemJSON, err error) { it.Status, it.Reason = stFailed, err.Error() }
 
 	if it := byKind(kindPathEntry); it != nil {
-		if _, err := install.RemoveFromUserPath(app.userPath(), dir); err != nil {
+		if _, err := install.RemoveFromUserPath(app.pathStore(), dir); err != nil {
 			fail(it, err)
 		} else {
 			it.Status = stDone
