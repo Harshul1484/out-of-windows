@@ -78,6 +78,11 @@ oow uninstall            # pick apps, run their uninstallers, review leftovers
 oow uninstall --list     # every installed app (registry, Store, Scoop, Chocolatey)
 oow uninstall "Contoso Studio" --dry-run   # what would run and what is related
 oow leftovers --dry-run  # folders left behind by apps that are gone
+oow purge --dry-run      # rebuildable project folders: node_modules, target, .venv, bin/obj, ...
+oow purge D:\code        # choose and delete them (Git-tracked, linked and recent folders are kept)
+oow config purge add D:\code               # folders purge scans (default: source\repos, Projects, dev, ...)
+oow installer --dry-run  # installer packages in Downloads, Desktop and Documents, by content
+oow installer            # choose; confirmed installers go to the Recycle Bin
 oow analyze              # pick a drive and explore it (enter, backspace, s, f, /, L, d, o, r)
 oow analyze --large --min-size 1GB         # largest files
 oow analyze D:\Projects --json --depth 2   # machine-readable breakdown

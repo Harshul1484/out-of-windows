@@ -193,6 +193,42 @@ disk, network and GPU rates from PDH counters added by English name; GPU names f
 display-adapter registry key; NVIDIA details by running `nvidia-smi` (hidden window, 2 s
 timeout) when it is installed. Nothing is stopped, changed or sent anywhere.
 
+### Project artifacts (purge) and installer packages
+
+- **Purge scope.** Only folders passed as arguments, configured `purge.paths`, or existing default
+  project folders in the profile are scanned; roots that are links, system trees, AppData,
+  sensitive or protected locations, other users' profiles or the system drive are refused. The
+  walk is depth-bounded, never follows links and skips dot folders, `node_modules`, vendored code
+  and `Package Cache`. An artifact needs its project's marker file next to it; folders holding
+  project markers are never artifacts, and artifacts are never searched for more projects.
+- **Keep rules** (evaluated at scan time and again right before deletion): Git-tracked files
+  (`git ls-files --cached` with `:(top,literal,icase)` pathspecs), nested `.git`, links and
+  junctions, cloud-only placeholders, unreadable subfolders, sensitive file types (in package
+  stores only at the top level). Git runs with `core.fsmonitor=false`, `core.hooksPath=NUL`,
+  `GIT_OPTIONAL_LOCKS=0`, no inherited `GIT_*` variables and a timeout; it only reads. A missing
+  or failing Git keeps every artifact inside a repository (fail closed). Recent activity (7 days)
+  and dist/build/out without Git-ignore evidence are never preselected; `--yes` takes only the
+  preselection.
+- **Permanent deletion, verified per file.** Purge does not use the Recycle Bin (rebuildable data;
+  the Shell path is impractically slow, quota-limited and verifies only the top folder). Each
+  artifact is re-verified (same folder by creation time, not a link, guard, fresh walk with no
+  new or changed files since the scan, Git again); then each file goes through `RemoveVerified`
+  and folders are removed deepest first, every final path checked with `PurposePurge` scoped to
+  the artifact: known artifact name, parent not a drive root or never-remove location, outside
+  system trees, AppData and profile tool folders (dot folders, `scoop`, `go\pkg`, Conda), never
+  inside `.git`, never a sensitive file type outside package internals, never whitelisted or
+  protected. A parent swapped for a junction after the scan resolves outside the scope and is
+  refused at the sink (tested).
+- **Installers** are identified by content (compound-file class ID, MSIX manifest, PE structure
+  with setup-engine data or a setup version resource read with `GetFileVersionInfo`, ZIP root
+  entries, ISO root directory), never by name or extension alone; MSI properties are read with the
+  read-only Windows Installer database API; cloud placeholders are never opened. Search is
+  limited to Downloads, Desktop and Documents (or user-given folders outside system trees and
+  AppData, so `Windows\Installer` and `Package Cache` are never touched), 3 levels deep, skipping
+  links and repositories. Only packages whose product is installed (exact ProductCode, MSIX
+  identity or normalized name) and older than 7 days are preselected. Removal goes to the Recycle
+  Bin through `RecycleVerified` with `PurposeUserSelected`. Every run is recorded in history.
+
 ### Tool-owned and whitelisted locations
 
 `oow`'s own config and data directories, and every path in the user's whitelist, are
@@ -306,6 +342,12 @@ protected together with their ancestors (deleting a parent would delete them).
 | Analyzer Recycle Bin guard (user files yes; system, sensitive, folder roots, junctions no) | `internal/cli` `TestRecyclePathsGuard` |
 | Explorer navigation, confirmation, size updates | `internal/ui/explorer_test.go` |
 | End-to-end on a real VM | `scripts/ci/e2e-real.ps1` (temp, Windows Temp, Chrome profile with credential canaries, npm, Recycle Bin, uninstall of a registered app with leftovers) |
+| Purge guard purpose (scope, traversal, `.git`, sensitive files, AppData, tool folders, whitelist) | `internal/safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
+| Purge discovery and keep rules (tracked files, nested repos, links, keys, vendor, recent, ambiguous) | `internal/purge` `TestFindInSandbox`, `TestRemoveDeletesOnlySelected` |
+| Purge fail closed (Git missing or failing), changes and junction swaps after the scan, sink refusal | `TestGitMissingKeepsRepositoryArtifacts`, `TestGitFailureKeepsArtifacts`, `TestChangesAfterScanAreKept`, `TestSinkRefusesPathsOutsideTheArtifact`, `TestGitPathspecsAreLiteral` |
+| Purge CLI (dry run zero-write, exit 4, JSON, history, folders, `OOW_DRY_RUN`) | `internal/cli/purge_test.go` |
+| Installers by content, never by name; exact installed matching; Recycle Bin re-verification | `internal/installer/installer_test.go`, `internal/cli/installer_test.go` |
+| Real purge and installer runs on a VM | `scripts/ci/e2e-real.ps1` (tracked `dist`, recent project, junction to Documents, deployment key, look-alike installers) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.

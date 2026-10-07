@@ -221,6 +221,97 @@ $ps = & $Oow processes --json --sort memory | ConvertFrom-Json
 if ($ps.schema -ne 'oow.processes/v1' -or $ps.total -lt 10) { throw 'processes JSON incomplete' }
 Write-Host '::endgroup::'
 
+Write-Host '::group::purge and installer (real projects, Git, Recycle Bin)'
+# Everything here is created by this section; oow only gets these folders as arguments.
+function Set-OldTree([string] $dir) {
+  Get-ChildItem -LiteralPath $dir -Recurse -Force -File | ForEach-Object { $_.CreationTime = $old; $_.LastWriteTime = $old }
+}
+$proj = Join-Path $env:USERPROFILE 'oow-ci-projects'
+$gitc = @('-c', 'user.name=oow ci', '-c', 'user.email=ci@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=NUL')
+# webapp (Git): node_modules is ignored and old (removed); dist is committed (kept).
+$web = Join-Path $proj 'webapp'
+New-File (Join-Path $web 'package.json') 100
+New-File (Join-Path $web 'src\index.js') 100
+New-File (Join-Path $web 'node_modules\left-pad\index.js') 5000
+New-File (Join-Path $web 'dist\bundle.js') 3000
+Set-Content -LiteralPath (Join-Path $web '.gitignore') -Value 'node_modules/' -Encoding ascii
+git -C $web @gitc init -q
+git -C $web @gitc add package.json .gitignore src dist
+git -C $web @gitc commit -q -m fixture
+if ($LASTEXITCODE -ne 0) { throw 'could not create the fixture repository' }
+# rustapp: Cargo build output (removed); rustkey: build output holding a signing key (kept).
+New-File (Join-Path $proj 'rustapp\Cargo.toml') 100
+New-File (Join-Path $proj 'rustapp\target\debug\app.exe') 200000
+New-File (Join-Path $proj 'rustkey\Cargo.toml') 100
+New-File (Join-Path $proj 'rustkey\target\release\signing.pfx') 2000
+# fresh: installed just now (not selected); linked: node_modules holds a junction to Documents (kept).
+New-File (Join-Path $proj 'fresh\package.json') 100
+New-File (Join-Path $proj 'fresh\node_modules\x\x.js') 1000
+New-File (Join-Path $proj 'linked\package.json') 100
+New-File (Join-Path $proj 'linked\node_modules\real\r.js') 1000
+cmd /c mklink /J (Join-Path $proj 'linked\node_modules\docs-link') "$docs" | Out-Null
+foreach ($d in 'webapp\node_modules', 'webapp\dist', 'rustapp\target', 'rustkey\target', 'linked\node_modules\real') { Set-OldTree (Join-Path $proj $d) }
+$purged = @((Join-Path $web 'node_modules'), (Join-Path $proj 'rustapp\target'))
+$canaries += @((Join-Path $web 'dist\bundle.js'), (Join-Path $web 'src\index.js'), (Join-Path $proj 'rustkey\target\release\signing.pfx'),
+  (Join-Path $proj 'fresh\node_modules\x\x.js'), (Join-Path $proj 'linked\node_modules\real\r.js'), (Join-Path $proj 'rustapp\Cargo.toml'))
+
+$dry = & $Oow purge $proj --dry-run --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $dry.dry_run) { throw "purge dry run failed ($LASTEXITCODE)" }
+$arts = $dry.projects | ForEach-Object { $_.artifacts }
+$arts | Format-Table path, kind, status, selected, bytes -AutoSize | Out-String | Write-Host
+foreach ($p in $purged) {
+  $a = $arts | Where-Object { $_.path -eq $p }
+  if (-not $a -or $a.status -ne 'ready') { throw "expected $p to be selected: $($a | ConvertTo-Json -Compress)" }
+}
+if ($dry.summary.selected -ne 2) { throw "expected 2 selected artifacts, got $($dry.summary.selected)" }
+foreach ($p in $purged) { if (-not (Test-Path -LiteralPath $p)) { throw "purge dry run removed $p" } }
+& $Oow purge $proj | Out-Null
+if ($LASTEXITCODE -ne 4) { throw "expected exit 4 from purge without --yes, got $LASTEXITCODE" }
+$pr = & $Oow purge $proj --yes --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $pr.summary.removed -ne 2 -or $pr.summary.errors -ne 0) { throw "purge failed: $($pr.summary | ConvertTo-Json -Compress)" }
+foreach ($p in $purged) { if (Test-Path -LiteralPath $p) { throw "artifact not removed: $p" } }
+if (-not (Test-Path -LiteralPath (Join-Path $proj 'linked\node_modules\docs-link'))) { throw 'junction inside node_modules was removed' }
+Assert-Canaries
+Write-Host "Purged $($pr.summary.removed) folders, $($pr.summary.reclaimed_bytes) bytes."
+
+# Installers: real file formats from the sandbox seed, copied to a folder in Downloads.
+$sb = Join-Path $env:USERPROFILE 'oow-ci-sandbox'
+& $Oow sandbox init $sb | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'sandbox init failed' }
+$downloads = $null
+try { $downloads = (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch {}
+if (-not $downloads) { $downloads = Join-Path $env:USERPROFILE 'Downloads' }
+$inst = Join-Path $downloads 'oow-ci-installers'
+New-Item -ItemType Directory -Force -Path $inst | Out-Null
+$seeded = Join-Path $sb 'C\Users\sandbox\Downloads'
+$installerNames = 'FabrikamPlayerSetup-2.0.1.exe', 'NorthwindSync-3.1.msi'
+$lookalikes = 'tailspin-terminal.exe', 'setup.pdf', 'notes.msi', 'old-report.msi', 'vacation-photos.zip'
+foreach ($n in $installerNames + $lookalikes) { Copy-Item -LiteralPath (Join-Path $seeded $n) -Destination $inst; Set-Old (Join-Path $inst $n) }
+foreach ($n in $lookalikes) { $canaries += (Join-Path $inst $n) }
+$canaries += (Join-Path $inst 'NorthwindSync-3.1.msi')
+# Fabrikam Player is "installed" (a registration only), so its installer is preselected.
+$fabKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OOWCIFabrikam'
+New-Item -Path $fabKey -Force | Out-Null
+New-ItemProperty -Path $fabKey -Name DisplayName -Value 'Fabrikam Player' | Out-Null
+New-ItemProperty -Path $fabKey -Name DisplayVersion -Value '2.0.1' | Out-Null
+New-ItemProperty -Path $fabKey -Name Publisher -Value 'Fabrikam, Inc.' | Out-Null
+New-ItemProperty -Path $fabKey -Name UninstallString -Value ('"' + (Join-Path $env:SystemRoot 'System32\cmd.exe') + '" /c exit') | Out-Null
+
+$idry = & $Oow installer $inst --dry-run --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw "installer dry run exited $LASTEXITCODE" }
+$idry.installers | Format-Table name, type, product, @{n = 'installed'; e = { $_.installed.status } }, status -AutoSize | Out-String | Write-Host
+if (@($idry.installers).Count -ne 2) { throw "expected 2 installers, got $(@($idry.installers).Count)" }
+$fab = $idry.installers | Where-Object { $_.name -eq 'FabrikamPlayerSetup-2.0.1.exe' }
+if (-not $fab.selected -or $fab.installed.status -ne 'installed') { throw "Fabrikam installer not preselected: $($fab | ConvertTo-Json -Compress)" }
+& $Oow installer $inst | Out-Null
+if ($LASTEXITCODE -ne 4) { throw "expected exit 4 from installer without --yes, got $LASTEXITCODE" }
+$ir = & $Oow installer $inst --yes --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $ir.summary.recycled -ne 1 -or $ir.summary.errors -ne 0) { throw "installer run failed: $($ir.summary | ConvertTo-Json -Compress)" }
+if (Test-Path -LiteralPath (Join-Path $inst 'FabrikamPlayerSetup-2.0.1.exe')) { throw 'installer not moved to the Recycle Bin' }
+Remove-Item -Path $fabKey -Recurse -Force
+Assert-Canaries
+Write-Host '::endgroup::'
+
 Write-Host '::group::history'
 & $Oow history
 Write-Host '::endgroup::'
