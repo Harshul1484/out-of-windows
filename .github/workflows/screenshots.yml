@@ -1,0 +1,94 @@
+name: Screenshots
+
+# Captures the README screenshots from the real CLI on a disposable runner,
+# inside oow's sandbox (a simulated Windows layout; nothing outside it is
+# changed). Each command's coloured output is converted to a terminal-window
+# page by tools/termshot and rendered to PNG with headless Chrome. The PNGs
+# (and the raw captures) are uploaded as an artifact to copy into
+# docs/screenshots/. Manual runs only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: build oow and termshot
+        run: |
+          go build -trimpath -o bin/oow.exe ./cmd/oow
+          go -C tools build -o ../bin/termshot.exe ./termshot
+
+      - name: capture in the sandbox
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $oow = (Resolve-Path bin/oow.exe).Path
+          $sb = 'D:\sandbox'
+          & $oow sandbox init $sb | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'sandbox init failed' }
+          # ui.color=always: the real colours even though output is captured.
+          $cfg = & $oow --sandbox $sb config path
+          Set-Content -LiteralPath $cfg -Value '{ "version": 1, "ui": { "color": "always" } }' -Encoding utf8NoBOM
+          New-Item -ItemType Directory -Force shots | Out-Null
+          $runs = @(
+            @('help',            'oow --help',                         @('--help')),
+            @('clean-preview',   'oow clean --dry-run',                @('clean', '--dry-run')),
+            @('clean-confirm',   'oow clean   (not interactive)',      @('clean')),
+            @('clean-complete',  'oow clean --yes',                    @('clean', '--yes')),
+            @('history',         'oow history',                        @('history')),
+            @('uninstall-list',  'oow uninstall --list',               @('uninstall', '--list')),
+            @('uninstall-plan',  'oow uninstall "Contoso Studio" --dry-run', @('uninstall', 'Contoso Studio', '--dry-run')),
+            @('leftovers',       'oow leftovers --dry-run',            @('leftovers', '--dry-run')),
+            @('analyze',         'oow analyze C:\Users\sandbox',       @('analyze', "$sb\C\Users\sandbox")),
+            @('analyze-large',   'oow analyze C:\ --large --top 8',    @('analyze', "$sb\C", '--large', '--top', '8')),
+            @('status',          'oow status',                         @('status')),
+            @('processes',       'oow processes --top 10',             @('processes', '--top', '10')),
+            @('doctor',          'oow doctor',                         @('doctor')),
+            @('startup',         'oow startup --list',                 @('startup', '--list')),
+            @('optimize',        'oow optimize --dry-run',             @('optimize', '--dry-run')),
+            @('repair',          'oow repair --dry-run',               @('repair', '--dry-run')),
+            @('purge',           'oow purge --dry-run',                @('purge', '--dry-run')),
+            @('installer',       'oow installer --dry-run',            @('installer', '--dry-run'))
+          )
+          $titles = @{}
+          foreach ($r in $runs) {
+            $name, $title, $cmdArgs = $r
+            $out = & $oow --sandbox $sb @cmdArgs 2>&1 | Out-String
+            Write-Host "== $name (exit $LASTEXITCODE)"
+            [IO.File]::WriteAllText((Join-Path $PWD "shots/$name.ans"), $out, [Text.UTF8Encoding]::new($false))
+            $titles[$name] = $title
+          }
+          $titles | ConvertTo-Json | Set-Content shots/titles.json -Encoding utf8NoBOM
+
+      - name: render PNGs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          $titles = Get-Content shots/titles.json -Raw | ConvertFrom-Json
+          foreach ($p in $titles.PSObject.Properties) {
+            $ans = "shots/$($p.Name).ans"
+            $html = (Join-Path $PWD "shots/$($p.Name).html")
+            $size = & bin/termshot.exe -in $ans -out $html -title $p.Value -replace 'D:\sandbox\C\=C:\'
+            if ($LASTEXITCODE -ne 0) { throw "termshot failed for $($p.Name)" }
+            $w, $h = $size.Trim() -split 'x'
+            $png = Join-Path $PWD "shots/$($p.Name).png"
+            & $chrome --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 "--window-size=$w,$h" "--screenshot=$png" "file:///$($html -replace '\\','/')" 2>$null
+            if (-not (Test-Path -LiteralPath $png)) { throw "no screenshot for $($p.Name)" }
+            Write-Host "$($p.Name).png  ${w}x${h} css px"
+          }
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: readme-screenshots
+          path: shots/
