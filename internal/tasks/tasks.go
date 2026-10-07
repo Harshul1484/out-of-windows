@@ -157,27 +157,51 @@ const maxArgPaths = 64
 // %VARIABLES% expanded by expand. Bare program names, relative paths and
 // network paths are left out.
 func (a Action) Paths(expand func(string) string) []string {
-	if expand == nil {
-		expand = func(s string) string { return s }
-	}
 	var out []string
-	add := func(p string) {
-		p = strings.Trim(strings.TrimSpace(p), `"`)
-		if isLocalAbs(p) {
-			out = append(out, filepath.Clean(p))
+	for _, p := range []string{a.Program(expand), a.WorkingDir(expand)} {
+		if p != "" {
+			out = append(out, p)
 		}
 	}
-	add(expand(a.Command))
-	add(expand(a.WorkingDirectory))
-	for i, tok := range splitArgs(expand(a.Arguments)) {
+	return append(out, a.ArgumentPaths(expand)...)
+}
+
+// Program is the absolute local path of the program, or "" when the
+// command is a bare name, relative or on a network.
+func (a Action) Program(expand func(string) string) string { return localAbs(a.Command, expand) }
+
+// WorkingDir is the absolute local working directory, or "".
+func (a Action) WorkingDir(expand func(string) string) string {
+	return localAbs(a.WorkingDirectory, expand)
+}
+
+// ArgumentPaths are the absolute local paths inside the arguments.
+func (a Action) ArgumentPaths(expand func(string) string) []string {
+	var out []string
+	for i, tok := range splitArgs(expandWith(expand, a.Arguments)) {
 		if i >= maxArgPaths {
 			break
 		}
-		if p := absPathIn(tok); p != "" {
-			add(p)
+		if p := localAbs(absPathIn(tok), nil); p != "" {
+			out = append(out, p)
 		}
 	}
 	return out
+}
+
+func expandWith(expand func(string) string, s string) string {
+	if expand == nil {
+		return s
+	}
+	return expand(s)
+}
+
+func localAbs(p string, expand func(string) string) string {
+	p = strings.Trim(strings.TrimSpace(expandWith(expand, p)), `"`)
+	if !isLocalAbs(p) {
+		return ""
+	}
+	return filepath.Clean(p)
 }
 
 func isLocalAbs(p string) bool {

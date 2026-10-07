@@ -549,7 +549,7 @@ func TestRepairPreviewConfirmAndApply(t *testing.T) {
 			t.Errorf("%s = %s after repair", name, got)
 		}
 	}
-	if tk := e.simTasks(); len(tk) != 3 || tk[`\Tailspin Sync`].Enabled || !tk[`\Wingtip Toys\Wingtip Logon Check`].Enabled {
+	if tk := e.simTasks(); len(tk) != 4 || tk[`\Tailspin Sync`].Enabled || !tk[`\Wingtip Toys\Wingtip Logon Check`].Enabled {
 		t.Errorf("tasks after repair = %+v (the broken task is disabled, never removed; working tasks untouched)", tk)
 	}
 	if !e.exists(`C\Users\sandbox\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Old Notes.lnk`) {

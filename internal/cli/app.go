@@ -240,9 +240,15 @@ func (a *App) usageTraces() []leftovers.Trace {
 	return leftovers.ReadTraces()
 }
 
+// systemClaims lists folders the system still uses. The sandbox simulates
+// only scheduled tasks among these sources.
 func (a *App) systemClaims() []leftovers.ClaimPath {
 	if a.Sandbox != "" {
-		return nil
+		list, _, err := sandbox.Tasks{Root: a.Sandbox}.List(context.Background())
+		if err != nil {
+			return nil
+		}
+		return leftovers.TaskClaims(list, func(s string) string { x, _ := sandbox.Expand(a.Sandbox, s); return x })
 	}
 	return leftovers.SystemClaims()
 }

@@ -165,8 +165,13 @@ key4.db, logins.json, cert9.db, places.sqlite, cookies.sqlite, formhistory.sqlit
   `Package Cache`, `Packages`, `Temp`, package managers), never user content, sensitive,
   protected or critical locations, never the Windows directory.
 - Claims from installed apps, running processes (`QueryFullProcessImageName`), services
-  (`ImagePath`) and Run/RunOnce entries keep folders; claims that would cover an entire root
-  (from malformed registrations) are ignored rather than widening anything.
+  (`ImagePath`), Run/RunOnce entries and scheduled tasks keep folders; claims that would cover an
+  entire root (from malformed registrations) are ignored rather than widening anything. Tasks
+  are read through `ITaskService` as the current user (read-only: `GetFolder`, `GetFolders`,
+  `GetTasks` with hidden tasks, `get_Path`, `get_Enabled`, `get_Xml`), and each task's XML
+  definition is parsed with a size bound; a task claims its programs' folders, working
+  directories and absolute argument paths, enabled or not. Folders or tasks the user cannot read
+  are counted, not guessed.
 - Folders containing sensitive file types are never offered.
 - Leftovers are moved with `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO`, plus
   `FOF_WANTNUKEWARNING` so the Shell warns instead of silently deleting), only on fixed drives,
@@ -442,6 +447,7 @@ protected together with their ancestors (deleting a parent would delete them).
 | Leftover guard purpose | `internal/safety` `TestLeftoverPurpose` |
 | Uninstall plans, waiting, verification, cancel, restart, failure | `internal/uninstall/uninstall_test.go` |
 | Leftovers: evidence, confidence, claims, traces, broken entries, sensitive content, admin, junctions, swaps | `internal/leftovers/leftovers_test.go` |
+| Scheduled tasks as claims (program folder, working directory, argument paths; disabled tasks still claim) | `internal/leftovers` `TestScheduledTasksClaimFolders`, `TestTaskClaimPaths`; `internal/cli` `TestLeftoversCommand` |
 | Uninstall/leftovers CLI (dry run, confirmation, JSON, failure, end to end) | `internal/cli/uninstall_test.go` |
 | Name normalization and command-line parsing | `internal/apps/apps_test.go` |
 | Analyzer totals, links, unreadable folders, cancellation, largest files | `internal/analyzer/analyzer_test.go` |
@@ -500,7 +506,10 @@ developer's real system.
 - Cache locations of third-party apps are taken from their documented or long-standing
   layouts; when an app changes its layout the rule finds nothing (it never widens).
 - Vendor uninstallers are third-party programs: `oow` controls when they run and verifies the
-  result, not what they do. Scheduled tasks are not yet used as claims.
+  result, not what they do.
+- Scheduled task claims cover only tasks the current user can read: a task visible only to
+  administrators claims nothing in a non-elevated run (the unreadable count is reported by
+  `oow startup` as a warning; an elevated run reads such tasks).
 - Not implemented, each needing its own review: `optimize` tasks for the Windows Update
   cache and the component store (DISM). Installer packages' Authenticode signatures are
   noted but not verified (detection relies on content, not on the signature).

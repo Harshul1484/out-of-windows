@@ -12,6 +12,7 @@ import (
 	"github.com/Harshul1484/out-of-windows/internal/leftovers"
 	"github.com/Harshul1484/out-of-windows/internal/safety"
 	"github.com/Harshul1484/out-of-windows/internal/sandbox"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 	"github.com/Harshul1484/out-of-windows/internal/testutil"
 	"github.com/Harshul1484/out-of-windows/internal/uninstall"
 )
@@ -199,6 +200,68 @@ func TestUsageTraces(t *testing.T) {
 	}
 	if !recentKept || len(got) != 2 {
 		t.Errorf("candidates %v, kept %+v", keys(got), res.Kept)
+	}
+}
+
+// A scheduled task that loads a DLL from a leftover folder keeps that folder,
+// even while the task is disabled; the app's other folder is still offered.
+func TestScheduledTasksClaimFolders(t *testing.T) {
+	w := newWorld(t)
+	evs := leftovers.EvidenceFromTraces(sandbox.Traces(w.root), w.guard, apps.FileExists)
+	list, _, err := sandbox.Tasks{Root: w.root}.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expand := func(s string) string { x, _ := sandbox.Expand(w.root, s); return x }
+	find := func(ts []tasks.Task) *leftovers.Result {
+		env := w.env(true)
+		env.Claims = leftovers.NewClaims(w.inventory(), func(a apps.App) bool { return a.IsBroken() }, leftovers.TaskClaims(ts, expand), w.guard)
+		return leftovers.Find(context.Background(), env, evs)
+	}
+	res := find(list)
+	got := byPath(res, w)
+	if _, ok := got[`C\Program Files\OldEditor`]; ok {
+		t.Fatal("a folder a scheduled task uses was offered")
+	}
+	if _, ok := got[roam+`\Old Editor`]; !ok {
+		t.Errorf("the folder the task does not use is missing: %v", keys(got))
+	}
+	kept := false
+	for _, k := range res.Kept {
+		kept = kept || w.rel(k.Path) == `C\Program Files\OldEditor` && k.Reason == `still used by scheduled task \Proseware\Old Editor Dictionary`
+	}
+	if !kept {
+		t.Errorf("kept = %+v", res.Kept)
+	}
+	// Without the task the folder is offered again.
+	var others []tasks.Task
+	for _, task := range list {
+		if task.Path != `\Proseware\Old Editor Dictionary` {
+			others = append(others, task)
+		}
+	}
+	if _, ok := byPath(find(others), w)[`C\Program Files\OldEditor`]; !ok {
+		t.Error("folder kept although no task uses it")
+	}
+}
+
+func TestTaskClaimPaths(t *testing.T) {
+	claims := leftovers.TaskClaims([]tasks.Task{{Path: `\Vendor\Job`, Actions: []tasks.Action{{
+		Command:          `"C:\Program Files\Vendor\Job\job.exe"`,
+		Arguments:        `--data "D:\Vendor Data\cache" --log=E:\logs\job.log`,
+		WorkingDirectory: `C:\ProgramData\Vendor`,
+	}}}}, nil)
+	var got []string
+	for _, c := range claims {
+		got = append(got, c.Path)
+		if c.Owner != `scheduled task \Vendor\Job` {
+			t.Errorf("owner = %q", c.Owner)
+		}
+	}
+	want := []string{`C:\Program Files\Vendor\Job`, `C:\ProgramData\Vendor`, `D:\Vendor Data\cache`, `D:\Vendor Data`,
+		`E:\logs\job.log`, `E:\logs`}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("claims = %q, want %q", got, want)
 	}
 }
 

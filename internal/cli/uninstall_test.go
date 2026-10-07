@@ -197,6 +197,20 @@ func TestLeftoversCommand(t *testing.T) {
 	if apps["Litware Tool"] != "high" || apps["Old Editor"] != "medium" || len(apps) != 2 {
 		t.Errorf("candidate apps = %v", apps)
 	}
+	// The simulated scheduled task that loads a DLL from Old Editor's
+	// program folder keeps that folder.
+	taskKept := false
+	for _, k := range doc.Result.Kept {
+		taskKept = taskKept || strings.HasSuffix(k.Path, `\Program Files\OldEditor`) && strings.Contains(k.Reason, "scheduled task")
+	}
+	for _, c := range doc.Result.Candidates {
+		if strings.HasSuffix(c.Path, `\Program Files\OldEditor`) {
+			t.Error("folder used by a scheduled task offered")
+		}
+	}
+	if !taskKept {
+		t.Errorf("kept = %+v", doc.Result.Kept)
+	}
 
 	// Non-interactive real run needs --yes and moves only high confidence.
 	if _, _, code := e.run("leftovers"); code != cli.ExitNeedsConfirm {

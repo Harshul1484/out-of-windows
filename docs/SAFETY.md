@@ -105,7 +105,12 @@ on discovery succeeding.
   Program Compatibility Assistant) of executables that no longer exist. Usage-trace evidence is
   at most medium confidence and ignored when the folder changed in the last 7 days.
 - **Claims keep folders.** Anything matching an installed app (name, install folder, program
-  folder), a running process, a service or a startup entry is kept and listed as such.
+  folder), a running process, a service, a startup entry or a scheduled task is kept and listed
+  as such. Scheduled tasks are read through the Task Scheduler API as the current user (every
+  task the user can read, Windows' own included); a task claims the folder of each program it
+  starts, its working directory, and absolute paths in its arguments with their folders (the
+  script or DLL a host program such as `rundll32` runs). Disabled tasks and tasks whose program
+  is gone still claim: enabling a task again needs its folder.
 - **The leftover purpose** of the guard allows only folders at most three levels inside
   Program Files, ProgramData, AppData (Roaming, Local, LocalLow) or `AppData\Local\Programs`,
   never Windows- or Microsoft-owned, shared (Common Files, WindowsApps, Package Cache,

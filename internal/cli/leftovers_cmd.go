@@ -29,8 +29,8 @@ func newLeftoversCmd(app *App) *cobra.Command {
 			buildinfo.Name + ", apps still listed but whose uninstaller and program files are missing, and\n" +
 			"programs Windows remembers running whose files no longer exist.\n\n" +
 			"A folder is only offered with evidence that the app owned it, never because a name\n" +
-			"merely looks similar. Folders still used by installed apps, running programs, services\n" +
-			"or startup entries are kept. Confirmed folders go to the Recycle Bin.",
+			"merely looks similar. Folders still used by installed apps, running programs, services,\n" +
+			"startup entries or scheduled tasks are kept. Confirmed folders go to the Recycle Bin.",
 		Example: "  " + buildinfo.Name + " leftovers --dry-run\n  " + buildinfo.Name + " leftovers --json --dry-run",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

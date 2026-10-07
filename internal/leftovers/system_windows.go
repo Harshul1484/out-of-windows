@@ -1,14 +1,17 @@
 package leftovers
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/Harshul1484/out-of-windows/internal/apps"
+	"github.com/Harshul1484/out-of-windows/internal/tasks"
 )
 
 // ReadTraces reads programs Windows recorded as having run for the current
@@ -68,14 +71,33 @@ func ReadTraces() []Trace {
 	return out
 }
 
-// SystemClaims lists folders still used by running processes, services and
-// startup entries, so their folders are never treated as leftovers.
+// SystemClaims lists folders still used by running processes, services,
+// startup entries and scheduled tasks, so their folders are never treated as
+// leftovers.
 func SystemClaims() []ClaimPath {
 	var out []ClaimPath
 	out = append(out, processClaims()...)
 	out = append(out, serviceClaims()...)
 	out = append(out, startupClaims()...)
+	out = append(out, scheduledTaskClaims()...)
 	return out
+}
+
+// scheduledTaskClaims reads every scheduled task the user can see (read-only,
+// through the Task Scheduler API) and claims the folders they use.
+func scheduledTaskClaims() []ClaimPath {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	list, _, err := tasks.System{}.List(ctx)
+	if err != nil {
+		return nil
+	}
+	return TaskClaims(list, func(s string) string {
+		if x, err := registry.ExpandString(s); err == nil {
+			return x
+		}
+		return s
+	})
 }
 
 func processClaims() []ClaimPath {

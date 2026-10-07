@@ -466,10 +466,15 @@ func (o Optimizer) ReTrim(ctx context.Context, v optimize.Volume) error {
 // seedTasks is the simulated Task Scheduler library: a sign-in task of the
 // simulated user whose program is gone (broken; the user may switch it off),
 // a sign-in task that runs as SYSTEM (all users: needs administrator rights),
-// and a Windows task that the startup list leaves out.
+// a Windows task that the startup list leaves out, and a daily task whose
+// rundll32 action loads a DLL from Old Editor's leftover folder, so that
+// folder is claimed (kept) while the task exists.
 func seedTasks(l safety.Locations) []tasks.Task {
 	logon := []tasks.Trigger{tasks.TriggerLogon}
 	return []tasks.Task{
+		{Path: `\Proseware\Old Editor Dictionary`, Enabled: false, Triggers: []tasks.Trigger{tasks.TriggerCalendar}, UserID: TaskAccount.SID,
+			Actions: []tasks.Action{{Command: `%SystemRoot%\System32\rundll32.exe`,
+				Arguments: `"` + filepath.Join(l.ProgramFiles, "OldEditor", "plugins", "spell.dll") + `",RefreshDictionary`}}},
 		{Path: `\Tailspin Sync`, Enabled: true, Triggers: logon, UserID: TaskAccount.SID, LogonUser: TaskAccount.Domain + `\` + UserName,
 			Actions: []tasks.Action{{Command: `%LOCALAPPDATA%\Programs\Tailspin Sync\tailspin.exe`, Arguments: "--background"}}},
 		{Path: `\Wingtip Toys\Wingtip Logon Check`, Enabled: true, Triggers: logon, UserID: "S-1-5-18", HighestPrivileges: true,
