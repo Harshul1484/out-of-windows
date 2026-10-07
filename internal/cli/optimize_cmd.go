@@ -38,13 +38,25 @@ func newOptimizeCmd(app *App) *cobra.Command {
 		Short:   "Run bounded, explained maintenance tasks",
 		GroupID: "system",
 		Long: "Run a short list of maintenance tasks through Windows' own interfaces: flush the DNS\n" +
-			"resolver cache, clear the Delivery Optimization cache (administrator), and retrim SSD\n" +
-			"volumes (administrator). Each task says what it does, why, and what changes afterwards.\n" +
-			"None of them makes Windows faster on its own, and none deletes your files.\n\n" +
+			"resolver cache, clear the Delivery Optimization cache (administrator), retrim SSD\n" +
+			"volumes (administrator), and, opt-in, clean up the component store (WinSxS) with DISM\n" +
+			"(administrator; never /ResetBase). Each task says what it does, why, and what changes\n" +
+			"afterwards. None of them makes Windows faster on its own, and none deletes your files.\n\n" +
+			"The component store cleanup is never preselected and DISM is not started unless you choose\n" +
+			"it in the list or name it with --task component-store: the analysis takes a few minutes,\n" +
+			"the cleanup can take over an hour, and Windows runs the same cleanup on its own schedule.\n" +
+			"DISM analyzes the store again right before acting and the cleanup runs only if DISM\n" +
+			"recommends it. Ctrl+C stops before the next task; a DISM cleanup that has started is left\n" +
+			"to finish, because stopping it midway is not safe.\n\n" +
+			"The Windows Update download cache (SoftwareDistribution\\Download) is not cleaned: Windows\n" +
+			"Update manages it, and Windows offers no supported way to clear it without stopping the\n" +
+			"update services and deleting files.\n\n" +
 			"Pending restarts, update settings and low disk space are shown for information; " + buildinfo.Name + "\n" +
 			"never restarts Windows or changes update settings.",
 		Example: "  " + buildinfo.Name + " optimize --dry-run\n" +
 			"  " + buildinfo.Name + " optimize --task dns-flush --yes\n" +
+			"  " + buildinfo.Name + " optimize --task component-store --dry-run   # DISM's analysis (administrator)\n" +
+			"  " + buildinfo.Name + " optimize --task component-store --yes       # opt-in: analyze, then clean if DISM recommends it\n" +
 			"  " + buildinfo.Name + " optimize --dry-run --json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,7 +68,7 @@ func newOptimizeCmd(app *App) *cobra.Command {
 	f := cmd.Flags()
 	f.BoolVarP(&o.dryRun, "dry-run", "n", false, "show the plan without running anything")
 	f.BoolVarP(&o.yes, "yes", "y", false, "run the ready tasks without asking (required for non-interactive use)")
-	f.StringSliceVar(&o.tasks, "task", nil, "only these tasks (dns-flush, delivery-optimization, ssd-retrim)")
+	f.StringSliceVar(&o.tasks, "task", nil, "only these tasks ("+strings.Join(optimize.ShortIDs(), ", ")+")")
 	f.BoolVar(&o.pause, "pause", false, "wait for Enter before exiting (used for elevated windows)")
 	_ = f.MarkHidden("pause")
 	return cmd
@@ -86,10 +98,14 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 	}
 	tasks, err := optimize.Select(o.tasks)
 	if err != nil {
-		return withCode(ExitUsage, "%v (tasks: dns-flush, delivery-optimization, ssd-retrim)", err)
+		return withCode(ExitUsage, "%v (tasks: %s)", err, strings.Join(optimize.ShortIDs(), ", "))
 	}
-	spin := ui.StartSpinner(app.Err, app.tty(), func() string { return "Preparing maintenance tasks" })
-	plan := optimize.Plan(ctx, app.optimizer(), app.Elevated, tasks)
+	preparing := "Preparing maintenance tasks"
+	if app.Elevated && optimize.Named(o.tasks, optimize.TaskComponentStore) {
+		preparing += " (DISM is analyzing the component store; this can take a few minutes)"
+	}
+	spin := ui.StartSpinner(app.Err, app.tty(), func() string { return preparing })
+	plan := optimize.Plan(ctx, app.optimizer(), app.Elevated, tasks, o.tasks)
 	notes := optimizeNotes(app)
 	spin.Stop()
 	if ctx.Err() != nil {
@@ -98,32 +114,41 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 	doc := map[string]any{"schema": "oow.optimize/v1", "dry_run": o.dryRun, "sandbox": app.Sandbox != "",
 		"elevated": app.Elevated, "tasks": plan, "notes": notes}
 
-	ready := 0
+	// available counts ready tasks, including opt-in ones the user can
+	// still choose in the list; selected counts what --yes would run.
+	selected, available := 0, 0
 	for _, it := range plan {
+		if it.Status == optimize.Ready {
+			available++
+		}
 		if it.Selected {
-			ready++
+			selected++
 		}
 	}
+	choose := app.interactive() && !o.yes
 	if !app.JSON {
 		app.header("Optimize", o.dryRun)
 		printOptimizePlan(app, plan, notes)
 	}
-	if o.dryRun || ready == 0 {
+	if o.dryRun || available == 0 || (selected == 0 && !choose) {
 		if app.JSON {
 			return app.printJSON(doc)
 		}
 		switch {
 		case o.dryRun:
 			app.printf(" %s\n\n", ui.Muted.Render("Dry run: nothing was run. Run `"+buildinfo.Name+" optimize` to choose and run tasks."))
-		default:
+		case available == 0:
 			app.printf(" %s\n\n", ui.Muted.Render("No task can run now."))
-			offerElevatedOptimize(ctx, app, plan)
+			offerElevatedOptimize(ctx, app, plan, o.tasks)
+		default:
+			app.printf(" %s\n\n", ui.Muted.Render("Nothing was run: opt-in tasks run only when you choose them (`"+
+				buildinfo.Name+" optimize --task <task>`)."))
 		}
 		return nil
 	}
 
 	switch {
-	case app.interactive() && !o.yes:
+	case choose:
 		chosen, ok, err := chooseTasks(plan)
 		if err != nil {
 			return err
@@ -155,9 +180,38 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 		return withCode(ExitNeedsConfirm, "refusing to run maintenance tasks without confirmation: pass --yes, or use --dry-run to preview")
 	}
 
-	spin = ui.StartSpinner(app.Err, app.tty(), func() string { return "Running maintenance tasks" })
+	running, stopping := "Running maintenance tasks", "Stopping after the current task"
+	dism := false
+	for _, it := range plan {
+		if it.Selected && it.Status == optimize.Ready && it.Task.ID == optimize.TaskComponentStore {
+			dism = true
+			running += " (the component store cleanup can take over an hour)"
+			stopping += "; a DISM cleanup that has started is left to finish, because stopping it midway is not safe " +
+				"(Ctrl+C again stops waiting; DISM keeps running)"
+		}
+	}
+	spin = ui.StartSpinner(app.Err, app.tty(), func() string {
+		if ctx.Err() != nil {
+			return stopping
+		}
+		return running
+	})
+	// Without a spinner, say once why Ctrl+C does not return at once.
+	finished, noted := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(noted)
+		select {
+		case <-ctx.Done():
+			if dism && !app.tty() {
+				fmt.Fprintf(app.Err, "\n %s.\n", stopping)
+			}
+		case <-finished:
+		}
+	}()
 	start := time.Now()
 	results := optimize.Run(ctx, app.optimizer(), plan)
+	close(finished)
+	<-noted
 	spin.Stop()
 	recordOptimize(app, results, time.Since(start))
 	doc["tasks"] = plan
@@ -179,7 +233,7 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 		return errCancelled
 	}
 	if !o.yes {
-		offerElevatedOptimize(ctx, app, plan)
+		offerElevatedOptimize(ctx, app, plan, o.tasks)
 	}
 	if failed > 0 {
 		return alreadyReported(ExitError, "%s did not complete", ui.Plural(failed, "task", "tasks"))
@@ -188,9 +242,13 @@ func runOptimize(ctx context.Context, app *App, o optimizeOptions) error {
 }
 
 func optimizeStatusLabel(it optimize.Item) string {
-	switch it.Status {
-	case optimize.Ready:
+	switch {
+	case it.Status == optimize.Ready && it.Task.OptIn && !it.Selected:
+		return ui.Accent.Render("opt-in")
+	case it.Status == optimize.Ready:
 		return ui.OK.Render("ready")
+	}
+	switch it.Status {
 	case optimize.NeedsAdmin:
 		return ui.Warn.Render("needs administrator")
 	case optimize.NotApplicable:
@@ -204,7 +262,7 @@ func printOptimizePlan(app *App, plan []optimize.Item, notes []doctor.Check) {
 	app.printf(" %s\n", ui.Bold.Render("Tasks"))
 	for _, it := range plan {
 		mark := ui.Accent.Render(ui.SymItem)
-		if it.Status != optimize.Ready {
+		if !it.Selected {
 			mark = ui.Muted.Render(ui.SymSkip)
 		}
 		extra := ""
@@ -218,9 +276,13 @@ func printOptimizePlan(app *App, plan []optimize.Item, notes []doctor.Check) {
 			}
 			extra = "  " + ui.Muted.Render(strings.Join(roots, " "))
 		}
+		if cs := it.ComponentStore; cs != nil {
+			extra = "  " + ui.Muted.Render(fmt.Sprintf("store %s, overhead %s, %s", ui.Bytes(cs.ActualBytes),
+				ui.Bytes(cs.OverheadBytes()), ui.Plural(cs.ReclaimablePackages, "reclaimable package", "reclaimable packages")))
+		}
 		app.printf("   %s %s  %s%s\n", mark, ui.Bold.Render(it.Task.Name), optimizeStatusLabel(it), extra)
-		if it.Reason != "" && it.Status != optimize.Ready {
-			app.printf("     %s\n", ui.Muted.Render(it.Reason))
+		if it.Reason != "" {
+			app.printf("     %s\n", ui.RenderLines(ui.Muted, ui.Wrap(it.Reason, width-6, "     ")))
 		}
 		for _, line := range [][2]string{{"What", it.Task.What}, {"Why", it.Task.Why}, {"After", it.Task.Effect}} {
 			app.printf("     %s %s\n", ui.Muted.Render(ui.PadRight(line[0], 6)), ui.Wrap(line[1], width-14, "            "))
@@ -250,6 +312,9 @@ func chooseTasks(plan []optimize.Item) ([]optimize.Item, bool, error) {
 		}
 		if it.Status != optimize.Ready {
 			items[i].Disabled, items[i].Note = true, it.Reason
+		} else if it.Reason != "" {
+			// Opt-in: choosable, with the reason it is not preselected.
+			items[i].Detail = append([]string{"Note   " + it.Reason}, items[i].Detail...)
 		}
 	}
 	r, err := ui.RunChecklist(ui.ChecklistOptions{Title: "Select maintenance tasks", ConfirmVerb: "continue"}, items)
@@ -277,6 +342,8 @@ func printOptimizeResults(app *App, results []optimize.Result) {
 			mark = ui.Err.Render(ui.SymErr)
 		case optimize.Partial, optimize.Cancelled:
 			mark = ui.Warn.Render(ui.SymWarn)
+		case optimize.Skipped:
+			mark = ui.Muted.Render(ui.SymSkip)
 		}
 		app.printf("   %s %s %s\n", mark, ui.Bold.Render(r.Name), ui.Muted.Render(r.Status))
 		app.printf("     %s\n", r.Message)
@@ -306,6 +373,9 @@ func recordOptimize(app *App, results []optimize.Result, d time.Duration) {
 			c.Status = "skipped"
 			rec.Skipped++
 			rec.Cancelled = true
+		case optimize.Skipped:
+			c.Status = "skipped"
+			rec.Skipped++
 		}
 		rec.Reclaimed += r.Freed
 		rec.Changes = append(rec.Changes, c)
@@ -316,13 +386,15 @@ func recordOptimize(app *App, results []optimize.Result, d time.Duration) {
 }
 
 // offerElevatedOptimize offers to run admin-only tasks in an elevated window.
-func offerElevatedOptimize(ctx context.Context, app *App, plan []optimize.Item) {
+// Opt-in tasks are included only when the user named them: the elevated
+// window receives them through --task, which would preselect them.
+func offerElevatedOptimize(ctx context.Context, app *App, plan []optimize.Item, filters []string) {
 	if !app.interactive() || app.Elevated || app.Sandbox != "" {
 		return
 	}
 	var ids, names []string
 	for _, it := range plan {
-		if it.Status == optimize.NeedsAdmin {
+		if it.Status == optimize.NeedsAdmin && (!it.Task.OptIn || optimize.Named(filters, it.Task.ID)) {
 			ids = append(ids, it.Task.ID)
 			names = append(names, it.Task.Name)
 		}

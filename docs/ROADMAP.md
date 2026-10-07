@@ -31,8 +31,8 @@ before the next begins.
 - [x] Sensitive locations and file types never cleaned
 - [x] Elevation on demand for admin-only targets (separate elevated window)
 - [x] One-screen report: empty and not-installed targets collapsed
-- Deferred to Phase 6 (`optimize`, owner APIs only): Delivery Optimization, Windows Update
-  download cache, component store
+- Deferred to Phase 6 (`optimize`, owner APIs only): Delivery Optimization, component store;
+  the Windows Update download cache is not supported (no owner interface)
 
 ## Phase 3 — Uninstaller ✅
 
@@ -86,10 +86,13 @@ before the next begins.
       disk pressure shown for information only
 - [x] `oow repair`: user PATH (missing, duplicate, empty entries; `.reg` backup first) and broken
       startup entries; the system PATH is reported, never changed
-- Not planned: winsock or network stack resets, restarting Explorer, Windows Update cache
-  deletion, registry tweaks
-- Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API);
-  the Windows Update download cache and component store through owner tools
+- [x] Component store (WinSxS) through DISM only, opt-in (`--task component-store` or chosen in
+      the list): a fresh read-only analysis right before acting, cleanup only when DISM recommends
+      it (`/StartComponentCleanup`, never `/ResetBase`), measured again afterwards, never
+      interrupted (#20)
+- Not planned: winsock or network stack resets, restarting Explorer, Windows Update download
+  cache deletion (no supported owner interface; see [SAFETY.md](SAFETY.md) §3e), registry tweaks
+- Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API)
 
 ## Phase 7 — Developer tools ✅
 

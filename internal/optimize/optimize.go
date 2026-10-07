@@ -1,8 +1,13 @@
 // Package optimize runs a short list of bounded maintenance tasks through the
 // owner's own interfaces (the DNS client, the Delivery Optimization cmdlets,
-// the volume optimizer). Each task states what it does, why, whether it needs
-// administrator rights and what its real effect is. None of them claims to
-// make Windows faster.
+// the volume optimizer, DISM for the component store). Each task states what
+// it does, why, whether it needs administrator rights and what its real effect
+// is. None of them claims to make Windows faster.
+//
+// The Windows Update download cache (SoftwareDistribution\Download) is
+// deliberately not a task: Windows offers no supported way to clear it other
+// than stopping the update services and deleting the folder (see
+// docs/SAFETY.md).
 package optimize
 
 import (
@@ -11,6 +16,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Harshul1484/out-of-windows/internal/buildinfo"
 )
 
 // Task is one maintenance task.
@@ -21,14 +28,20 @@ type Task struct {
 	Why           string `json:"why"`
 	Effect        string `json:"effect"`
 	RequiresAdmin bool   `json:"requires_admin"`
+	// OptIn tasks have a visible cost (time) and an owner that already does
+	// the same on its own schedule: they are never preselected, and Plan does
+	// not even measure them unless the user names them (--task).
+	OptIn bool `json:"-"`
 }
 
 // Task IDs.
 const (
-	TaskDNS     = "optimize.dns-flush"
-	TaskDO      = "optimize.delivery-optimization"
-	TaskReTrim  = "optimize.ssd-retrim"
-	minFreeable = 1 << 20 // below 1 MB the Delivery Optimization cache is "already empty"
+	TaskDNS    = "optimize.dns-flush"
+	TaskDO     = "optimize.delivery-optimization"
+	TaskReTrim = "optimize.ssd-retrim"
+	// TaskComponentStore cleans the component store (WinSxS) through DISM.
+	TaskComponentStore = "optimize.component-store"
+	minFreeable        = 1 << 20 // below 1 MB the Delivery Optimization cache is "already empty"
 )
 
 // Tasks lists every task in order.
@@ -60,6 +73,20 @@ func Tasks() []*Task {
 				"measurable change. Hard disks are never touched (no defragmentation).",
 			RequiresAdmin: true,
 		},
+		{
+			ID:   TaskComponentStore,
+			Name: "Clean up the component store (WinSxS)",
+			What: "Runs DISM /Online /Cleanup-Image /StartComponentCleanup, Windows' own tool, which removes superseded " +
+				"versions of updated system components, only when DISM's analysis right before it recommends a cleanup. " +
+				"Never /ResetBase.",
+			Why: "Windows keeps previous versions of updated components so an update can be rolled back. Its own " +
+				"scheduled cleanup removes them only 30 days later, within a 1-hour limit, and can fall behind.",
+			Effect: "Frees part of the store's overhead (measured by analyzing again afterwards). The removed versions are gone " +
+				"at once, without the 30-day grace period; installed updates can still be uninstalled. Can take from minutes " +
+				"to over an hour; once started, DISM is left to finish, even if you press Ctrl+C.",
+			RequiresAdmin: true,
+			OptIn:         true,
+		},
 	}
 }
 
@@ -87,6 +114,13 @@ type Runner interface {
 	ClearDeliveryOptimization(ctx context.Context) error
 	SSDVolumes(ctx context.Context) ([]Volume, error)
 	ReTrim(ctx context.Context, v Volume) error
+	// AnalyzeComponentStore reads DISM's report (read-only, administrator
+	// only). A failed run or an unreadable report is an error, never a guess.
+	AnalyzeComponentStore(ctx context.Context) (ComponentStore, error)
+	// CleanupComponentStore runs DISM's component cleanup and waits for it to
+	// finish even when ctx is cancelled. restart reports that DISM asked for
+	// a restart to complete.
+	CleanupComponentStore(ctx context.Context) (restart bool, err error)
 }
 
 // Status of a planned task.
@@ -105,21 +139,45 @@ type Item struct {
 	Task   *Task  `json:"task"`
 	Status Status `json:"status"`
 	Reason string `json:"reason,omitempty"`
-	// Selected is whether it runs (by default every ready task).
+	// Selected is whether it runs: by default every ready task, except
+	// opt-in tasks the user did not name.
 	Selected bool `json:"selected"`
-	// BytesBefore is the Delivery Optimization cache size (-1 unknown).
+	// BytesBefore is the size of what the task cleans (-1 unknown): the
+	// Delivery Optimization cache, or the component store's actual size.
 	BytesBefore int64    `json:"bytes_before,omitempty"`
 	Volumes     []Volume `json:"volumes,omitempty"`
+	// ComponentStore is DISM's analysis, when it could be read.
+	ComponentStore *ComponentStore `json:"component_store,omitempty"`
 }
 
 // ReasonNeedsAdmin explains admin-only tasks in a non-elevated process.
 const ReasonNeedsAdmin = "requires administrator: run oow from an elevated terminal"
 
-// Plan describes what each task would do now. It changes nothing.
-func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item {
+// reasonOptIn explains why the component store cleanup is not preselected.
+var reasonOptIn = "opt-in: it can take over an hour, and Windows also runs this cleanup on its own schedule; " +
+	"choose it in the list or run `" + buildinfo.Name + " optimize --task component-store`"
+
+// Named reports whether filters (the --task values) name the task itself,
+// with or without its "optimize." prefix, rather than a prefix covering all.
+func Named(filters []string, id string) bool {
+	short := strings.TrimPrefix(id, "optimize.")
+	for _, f := range filters {
+		f = strings.ToLower(strings.TrimSpace(f))
+		if f == id || f == short {
+			return true
+		}
+	}
+	return false
+}
+
+// Plan describes what each task would do now. It changes nothing. filters
+// are the --task values: an opt-in task is measured and preselected only when
+// they name it; otherwise it is listed, unselected, without running anything.
+func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task, filters []string) []Item {
 	var out []Item
 	for _, t := range tasks {
 		it := Item{Task: t, Status: Ready}
+		named := Named(filters, t.ID)
 		switch t.ID {
 		case TaskDO:
 			c := sys.DeliveryOptimization(ctx, elevated)
@@ -143,12 +201,36 @@ func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item 
 			case !elevated:
 				it.Status, it.Reason = NeedsAdmin, ReasonNeedsAdmin
 			}
+		case TaskComponentStore:
+			it.BytesBefore = -1
+			if !elevated {
+				// DISM's analysis itself needs administrator rights.
+				it.Status, it.Reason = NeedsAdmin, ReasonNeedsAdmin
+				break
+			}
+			if !named {
+				// Not requested: DISM is not started at all. If the user
+				// ticks it later, Run analyzes before acting.
+				it.Reason = reasonOptIn
+				break
+			}
+			cs, err := sys.AnalyzeComponentStore(ctx)
+			switch {
+			case err != nil:
+				it.Status, it.Reason = Unavailable, "the cleanup runs only when DISM's analysis recommends it, and the analysis failed: "+err.Error()
+			case !cs.Recommended:
+				it.ComponentStore, it.BytesBefore = &cs, cs.ActualBytes
+				it.Status, it.Reason = NotApplicable, fmt.Sprintf("DISM does not recommend a cleanup (%s)",
+					reclaimablePackages(cs.ReclaimablePackages))
+			default:
+				it.ComponentStore, it.BytesBefore = &cs, cs.ActualBytes
+			}
 		default:
 			if t.RequiresAdmin && !elevated {
 				it.Status, it.Reason = NeedsAdmin, ReasonNeedsAdmin
 			}
 		}
-		it.Selected = it.Status == Ready
+		it.Selected = it.Status == Ready && (!t.OptIn || named)
 		out = append(out, it)
 	}
 	return out
@@ -158,15 +240,20 @@ func Plan(ctx context.Context, sys Runner, elevated bool, tasks []*Task) []Item 
 type Result struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Status  string `json:"status"` // done, failed, partial, cancelled
+	Status  string `json:"status"` // done, failed, partial, cancelled, skipped
 	Message string `json:"message"`
-	// BytesBefore/BytesAfter: Delivery Optimization cache size around the
-	// run (-1 unknown); Freed is the measured difference.
+	// BytesBefore/BytesAfter: size of what the task cleans around the run
+	// (Delivery Optimization cache, component store; -1 unknown); Freed is
+	// the measured difference.
 	BytesBefore int64          `json:"bytes_before,omitempty"`
 	BytesAfter  int64          `json:"bytes_after,omitempty"`
 	Freed       int64          `json:"freed_bytes,omitempty"`
 	Volumes     []VolumeResult `json:"volumes,omitempty"`
-	DurationMS  int64          `json:"duration_ms"`
+	// ComponentStore is DISM's analysis after the cleanup, when it was read.
+	ComponentStore *ComponentStore `json:"component_store,omitempty"`
+	// RestartRequired: DISM needs a restart to finish (oow never restarts).
+	RestartRequired bool  `json:"restart_required,omitempty"`
+	DurationMS      int64 `json:"duration_ms"`
 }
 
 // VolumeResult is the retrim outcome of one volume.
@@ -181,10 +268,13 @@ const (
 	Failed    = "failed"
 	Partial   = "partial"
 	Cancelled = "cancelled"
+	// Skipped: checked right before acting and found nothing to do; not run.
+	Skipped = "skipped"
 )
 
 // Run runs the selected ready items in order. Cancellation stops before the
-// next task (and before the next volume of a retrim).
+// next task (and before the next volume of a retrim); a component store
+// cleanup that has started is left to finish.
 func Run(ctx context.Context, sys Runner, items []Item) []Result {
 	var out []Result
 	for _, it := range items {
@@ -256,11 +346,79 @@ func Run(ctx context.Context, sys Runner, items []Item) []Result {
 			default:
 				r.Status = Done
 			}
+		case TaskComponentStore:
+			runComponentStore(ctx, sys, &r)
 		default:
 			r.Status, r.Message = Failed, "unknown task"
 		}
 		r.DurationMS = time.Since(start).Milliseconds()
 		out = append(out, r)
+	}
+	return out
+}
+
+// runComponentStore analyzes the store, runs DISM's cleanup only if that
+// fresh analysis recommends it, then measures the store again. The cleanup is
+// not interrupted by cancellation; the measurement afterwards is skipped when
+// the user cancelled.
+func runComponentStore(ctx context.Context, sys Runner, r *Result) {
+	r.BytesBefore, r.BytesAfter = -1, -1
+	// Re-check right before acting: a plan-time analysis (or none, when the
+	// task was ticked in the list) is never trusted on its own.
+	before, err := sys.AnalyzeComponentStore(ctx)
+	switch {
+	case ctx.Err() != nil:
+		r.Status, r.Message = Cancelled, "not started: cancelled during DISM's analysis (nothing was changed)"
+		return
+	case err != nil:
+		r.Status, r.Message = Failed, "the cleanup was not run: DISM's analysis right before it failed: "+err.Error()
+		return
+	}
+	r.BytesBefore = before.ActualBytes
+	if !before.Recommended {
+		r.ComponentStore, r.BytesAfter = &before, before.ActualBytes
+		r.Status, r.Message = Skipped, fmt.Sprintf("the cleanup was not run: DISM does not recommend it now (%s)",
+			reclaimablePackages(before.ReclaimablePackages))
+		return
+	}
+	restart, err := sys.CleanupComponentStore(ctx)
+	if err != nil {
+		r.Status, r.Message = Failed, err.Error()
+		return
+	}
+	r.Status, r.RestartRequired = Done, restart
+	msg := "DISM cleaned up the component store"
+	if ctx.Err() != nil {
+		msg += "; it was left to finish after the cancel (stopping it midway is not safe), and its size afterwards was not measured"
+	} else if after, err := sys.AnalyzeComponentStore(ctx); err != nil {
+		msg += " (its size afterwards could not be measured: " + err.Error() + ")"
+	} else {
+		r.ComponentStore, r.BytesAfter = &after, after.ActualBytes
+		if r.BytesBefore >= 0 && r.BytesBefore > r.BytesAfter {
+			r.Freed = r.BytesBefore - r.BytesAfter
+		}
+		msg += fmt.Sprintf(" (%s freed; the store is now %s, %s left)", sizeString(r.Freed),
+			sizeString(after.ActualBytes), reclaimablePackages(after.ReclaimablePackages))
+	}
+	if restart {
+		msg += "; Windows needs a restart to finish it"
+	}
+	r.Message = msg
+}
+
+func reclaimablePackages(n int) string {
+	if n == 1 {
+		return "1 reclaimable package"
+	}
+	return fmt.Sprintf("%d reclaimable packages", n)
+}
+
+// ShortIDs lists the task IDs without their "optimize." prefix, as --task
+// accepts them.
+func ShortIDs() []string {
+	var out []string
+	for _, t := range Tasks() {
+		out = append(out, strings.TrimPrefix(t.ID, "optimize."))
 	}
 	return out
 }

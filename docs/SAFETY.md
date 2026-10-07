@@ -223,6 +223,108 @@ through the verified recycle sink with `PurposeUserSelected`.
   the next start through `RemoveVerified` with an exact final-path check. Package-managed
   installs (winget, Scoop, Chocolatey) are never updated or removed by `oow`.
 
+### 3e. Maintenance through owner tools (`optimize`)
+
+`oow optimize` changes Windows state only through the owner's interface. It never deletes
+anything under the Windows folder itself; the reviewed tasks are listed in
+`SECURITY_AUDIT.md`. This section covers the two update-related targets.
+
+**Component store (WinSxS): `optimize.component-store`, through DISM only.**
+
+- **Opt-in.** By the recovery-contract rule the task is opt-in: it has a visible cost (minutes
+  for the analysis, possibly over an hour for the cleanup), and Windows' own
+  `StartComponentCleanup` scheduled task already does the same work. It is never preselected.
+  Unless `--task component-store` (or `optimize.component-store`) names it, the plan lists it as
+  `ready`, unselected, with the reason, and **DISM is not started at all**: `oow optimize --yes`
+  never runs it and an elevated `--dry-run` stays fast. The elevated-window offer passes it on
+  only when the user named it. Naming it runs the analysis in the plan and preselects the task
+  when DISM recommends a cleanup.
+- **Measure first, read-only.** `Dism.exe /Online /English /Cleanup-Image
+  /AnalyzeComponentStore`, started from System32 by full path (`GetSystemDirectory`, never
+  PATH), hidden, never through a shell. It needs administrator rights, so without elevation it
+  is not started at all and the task is `needs-admin`.
+- **Parse or refuse.** The report is read by its English labels (`/English`; Microsoft notes
+  that some resources may still be localized). The required lines are Actual Size, Backups and
+  Disabled Features, Cache and Temporary Data, Number of Reclaimable Packages and Component
+  Store Cleanup Recommended (`Yes`/`No`). A missing, repeated-with-a-different-value or
+  unreadable line, an unknown unit, an `Error:` line, or an overhead larger than the store makes
+  the whole report unreadable: the task is `unavailable` with the cause, nothing is shown as
+  zero, and nothing runs. Sizes accept DISM's two-decimal format with either decimal mark and
+  thousands grouping; UTF-16 output is decoded.
+- **Act only on DISM's own, fresh recommendation.** In a named plan, `Recommended: No` makes the
+  task `not-applicable`. A plan-time analysis is never trusted on its own: right before acting,
+  including when the task was ticked in the list without any analysis, oow analyzes again and runs
+  the cleanup only if that report says `Yes`. Otherwise nothing runs: the result is `skipped`
+  with "DISM does not recommend it now", or `failed` when that analysis fails. Then oow runs
+  exactly `Dism.exe /Online /English /Quiet /NoRestart /Cleanup-Image /StartComponentCleanup`.
+  `/NoRestart` is required
+  because DISM may restart Windows by itself under `/Quiet`. **Never used:** `/ResetBase`
+  (installed updates could no longer be uninstalled), `/SPSuperseded` (service packs could no
+  longer be uninstalled) and `/Defer`. A unit test pins both command lines, and the CI run
+  watches every DISM process command line and `dism.log` for these options.
+- **Explained effect.** Microsoft documents that this has "similar results" to Windows' own
+  scheduled `StartComponentCleanup` task, except that previous versions of updated components
+  are deleted at once (no 30-day grace period) and there is no 1-hour limit. Installed updates
+  stay uninstallable (only `/ResetBase` prevents that). The task says so before it runs.
+- **Verify.** After the cleanup oow runs the analysis again and reports the measured change in
+  DISM's Actual Size (rounded to DISM's two decimals) as freed; if the store cannot be measured
+  afterwards nothing is claimed. Exit code 3010 is "done, restart required" (oow never
+  restarts); `0x800f0806` (servicing operations pending) is reported with "restart Windows,
+  then run this task again".
+- **Bounded, never interrupted.** The analysis is limited to 30 minutes and the cleanup to 3
+  hours. oow never terminates DISM: at a limit it stops waiting, reports the task as failed and
+  says DISM was left running. DISM runs in its own hidden console and process group, so Ctrl+C
+  in oow's console never reaches it. Ctrl+C during the analysis stops waiting (the read-only
+  analysis finishes on its own). Ctrl+C during the cleanup does not stop it: oow says that it
+  is waiting for DISM to finish, reports the outcome, records the run and starts no further
+  task. A second Ctrl+C exits oow without waiting; DISM still finishes, and that run is not
+  recorded in history.
+- **Sandbox.** The simulated DISM serves report text through the same parser; a simulated
+  cleanup swaps in the "after" report and counts the run. Each simulated run's command line is
+  recorded in `dism-calls.log` at the sandbox root (outside the simulated drive and registry, so
+  previews leave the simulated system unchanged), which is how tests check that `--yes` alone
+  never starts DISM and that the cleanup follows a fresh analysis. Tests never start DISM, except the
+  read-only real-system test (`OOW_TEST_REAL_SYSTEM=1`), which only runs the analysis: without
+  elevation DISM refuses at once (error 740, no prompt).
+
+**Windows Update download cache (`SoftwareDistribution\Download`): not supported.**
+
+Windows offers no supported interface that empties this folder on its own:
+
+- The only Microsoft-documented procedure ("Additional resources for Windows Update",
+  *Reset Windows Update components manually*) is a last-resort troubleshooting step: stop the
+  BITS, Windows Update and Cryptographic services, then delete or rename `SoftwareDistribution`
+  (or its `Download` and `DataStore` folders) and start the services again.
+- There is no cmdlet, and the Windows Update Agent API has no method that clears downloaded
+  content. Storage Sense has no public interface to run one category on demand.
+- Disk Cleanup's "Windows Update Cleanup" handler cleans the component store, which the DISM
+  task above already covers through the owner tool. Driving `cleanmgr /sageset /sagerun` would
+  write `StateFlags` registry values (a registry write outside a reviewed feature) and run
+  every selected handler, which is not bounded or explainable per target.
+- Windows Update removes downloaded content itself after the updates are installed; what stays
+  is usually content for updates that are pending or in progress, which a deletion could break
+  (stopping the services mid-update can also leave the `DataStore` inconsistent).
+
+Stopping the services and deleting the files ourselves would be raw deletion of Windows Update
+staging, which AGENTS.md forbids, on top of stopping system services, which no `optimize` task
+does. The answer is therefore "not supported" (product decision filter question 5).
+`oow optimize --help` says so; the run output does not repeat it, because there is no action
+for the user. CI prints the folder's size (read-only) so the decision can be revisited with
+data. It is revisited only if Microsoft documents a supported interface.
+
+**Magnitude and keep-or-kill thresholds (written before the samples).** The CI end-to-end run
+prints `MAGNITUDE` lines (DISM's analysis, the cleanup's measured result and duration, the
+download cache size); users can contribute `oow optimize --task component-store --dry-run
+--json` output.
+
+- Component store: keep the task if DISM recommends a cleanup on at least 1 in 5 sampled
+  machines and the median measured freed amount where it ran is at least 1 GB. If every
+  sample frees less than 500 MB, or DISM almost never recommends a cleanup, remove the task
+  and point users to Windows' own scheduled cleanup instead.
+- Download cache: whatever the samples show, oow does not delete it. If it holds more than
+  1 GB on at least 1 in 5 machines with no pending update, an informational `doctor` note
+  pointing to Settings › Windows Update is the most that would be added.
+
 ### 4. Scanning
 
 The walker never descends into reparse points (junctions, symlinks, mount points); they are
@@ -293,4 +395,7 @@ show bytes removed and the *measured* change in free space.
 | Purge purpose: scope, traversal, `.git`, sensitive files, AppData and tool folders | `safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
 | Purge discovery, keep rules, Git fail-closed, junction swaps, changes after scan, review artifacts recycled (kept without a Recycle Bin) | `purge/purge_test.go` |
 | Installers identified by content, exact installed matching, Recycle Bin | `installer/installer_test.go` |
+| DISM report parsed from fixtures; localized, cut-off, error and malformed reports never become zero or "recommended" | `optimize` `TestParseComponentStoreReport`, `TestParseComponentStoreReportFailsClosed`, `TestParseDISMSize` |
+| DISM command lines fixed (never `/ResetBase`, `/SPSuperseded`, `/Defer`) | `optimize` `TestDISMCommandLines` |
+| Component store task: opt-in (DISM not started unless named; `--yes` alone never runs it), admin only, fresh analysis right before acting (also when ticked), runs only on DISM's recommendation, Ctrl+C leaves DISM to finish | `optimize` `TestComponentStoreIsOptIn`, `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreTickedWithoutAnalysis`, `TestRunComponentStoreRechecksBeforeActing`, `TestRunComponentStoreCancelLeavesDISMToFinish`; `cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeSandboxRunnerRechecksBeforeActing`, `TestOptimizeUnreadableDISMReportNeverRuns` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |

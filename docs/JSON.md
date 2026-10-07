@@ -388,7 +388,10 @@ Exit code 1 when an entry was skipped or failed, 4 without `--yes` when not inte
                 "what": "...", "why": "...", "effect": "...", "requires_admin": true },
       "status": "ready", "selected": true, "bytes_before": 5000000 },
     { "task": { "id": "optimize.ssd-retrim", "...": "..." }, "status": "ready", "selected": true,
-      "volumes": [ { "root": "C:\\", "file_system": "NTFS" } ] }
+      "volumes": [ { "root": "C:\\", "file_system": "NTFS" } ] },
+    { "task": { "id": "optimize.component-store", "...": "..." }, "status": "ready", "selected": false,
+      "reason": "opt-in: it can take over an hour, and Windows also runs this cleanup on its own schedule; choose it in the list or run `oow optimize --task component-store`",
+      "bytes_before": -1 }
   ],
   "notes": [ { "id": "reboot.pending", "status": "warning", "summary": "...", "next_step": "..." } ],
   "results": [
@@ -398,15 +401,53 @@ Exit code 1 when an entry was skipped or failed, 4 without `--yes` when not inte
 }
 ```
 
-- Task IDs: `optimize.dns-flush`, `optimize.delivery-optimization`, `optimize.ssd-retrim`
-  (`--task` accepts them with or without the `optimize.` prefix).
+With `--task component-store` (elevated), the task carries DISM's analysis:
+
+```json
+{ "task": { "id": "optimize.component-store", "...": "..." }, "status": "ready", "selected": true,
+  "bytes_before": 11692944097,
+  "component_store": { "actual_bytes": 11692944097, "explorer_bytes": 12047528837, "shared_bytes": 6603512627,
+                       "backups_bytes": 5089531576, "cache_bytes": 0, "reclaimable_packages": 3,
+                       "cleanup_recommended": true, "last_cleanup": "2024-03-18 09:58:02" } }
+```
+
+and a run reports the measured result:
+
+```json
+{ "id": "optimize.component-store", "name": "...", "status": "done", "message": "...",
+  "bytes_before": 11692944097, "bytes_after": 8213335244, "freed_bytes": 3479608853,
+  "component_store": { "...": "the analysis after the cleanup" }, "duration_ms": 1260000 }
+```
+
+- Task IDs: `optimize.dns-flush`, `optimize.delivery-optimization`, `optimize.ssd-retrim`,
+  `optimize.component-store` (`--task` accepts them with or without the `optimize.` prefix).
 - `status`: `ready`, `needs-admin`, `not-applicable` (nothing to do), `unavailable` (this Windows
-  cannot run it); `reason` explains every status but `ready`. `bytes_before` is `-1` when the cache
-  cannot be measured (it is readable only by administrators).
+  cannot run it); `reason` explains every status but `ready`, and also an opt-in task that is
+  `ready` but not `selected`. `bytes_before` is the size of what the task cleans: the Delivery
+  Optimization cache, or the component store's actual size. It is `-1` when it was not measured
+  (both need administrator rights).
+- `selected` is what `--yes` runs: every `ready` task except `optimize.component-store`, which is
+  opt-in. Unless `--task` names it (`component-store` or `optimize.component-store`; a prefix such
+  as `optimize` does not), it is listed as `ready`, `selected: false`, with the `opt-in: ...`
+  reason, `bytes_before: -1` and no `component_store`, and DISM is not started at all.
+- `component_store` (task `optimize.component-store` named with `--task`, elevated runs only) is
+  DISM's `/AnalyzeComponentStore` report: `actual_bytes` (hard links counted once),
+  `explorer_bytes` and `shared_bytes` (`-1` when DISM did not print them), `backups_bytes`
+  ("Backups and Disabled Features") plus `cache_bytes` ("Cache and Temporary Data") is the overhead
+  a cleanup frees part of, `reclaimable_packages`, `cleanup_recommended`, and `last_cleanup` as
+  DISM printed it. It is present only when the whole report could be read; otherwise the task is
+  `unavailable` with the reason. When named, the task is `ready` and `selected` if
+  `cleanup_recommended` is true and `not-applicable` if it is false.
 - `notes` are doctor checks shown for information only (`reboot.pending`, `windows-update`,
   `disk.free.*` when not ok); optimize never acts on them.
-- `results` appears after a real run; `status` is `done`, `partial`, `failed` or `cancelled`.
-  Exit code 1 when a task failed or was partial.
+- `results` appears after a real run; `status` is `done`, `partial`, `failed`, `cancelled` or
+  `skipped`. Exit code 1 when a task failed or was partial. The component store is analyzed again
+  right before the cleanup, whatever the plan showed: if that analysis does not recommend a cleanup
+  the result is `skipped` (not run, with the reason; `component_store` is that analysis), and if it
+  fails the result is `failed` and nothing ran. After a cleanup, `bytes_after` and
+  `component_store` come from analyzing once more (`bytes_after` is `-1` when that was not
+  possible, and nothing is claimed as freed), and `restart_required` is true when DISM needs a
+  restart to finish.
 
 ## `oow repair --json` — `oow.repair/v1`
 
