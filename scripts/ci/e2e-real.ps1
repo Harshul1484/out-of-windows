@@ -257,6 +257,13 @@ $origKind = if ($null -ne $origPath) { $envKey.GetValueKind('Path') } else { [Mi
 $machinePathBefore = $machineEnv.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
 $otherApprovals = Get-ApprovalSnapshot
 
+# Some runner images have no Run key or Startup folder yet: create them for
+# this section, and remove them afterwards only if they were created here.
+$createdRunKey = -not (Test-Path -LiteralPath $runKey)
+if ($createdRunKey) { New-Item -Path $runKey -Force | Out-Null }
+$createdStartupDir = -not (Test-Path -LiteralPath $startupDir)
+if ($createdStartupDir) { New-Item -ItemType Directory -Force -Path $startupDir | Out-Null }
+
 # Entries created by this section: one whose program exists, one whose
 # program is gone, and two Shell-made shortcuts (one broken).
 New-ItemProperty -Path $runKey -Name 'OOW CI Present' -Value "`"$cmdExe`" /c exit" -Force | Out-Null
@@ -351,6 +358,13 @@ try {
     Remove-ItemProperty -Path $approvedFolderKey -Name $n -ErrorAction SilentlyContinue
   }
   Remove-Item -LiteralPath $ciPathDir -Force -ErrorAction SilentlyContinue
+  if ($createdRunKey) {
+    $k = Get-Item -LiteralPath $runKey -ErrorAction SilentlyContinue
+    if ($k -and $k.ValueCount -eq 0 -and $k.SubKeyCount -eq 0) { Remove-Item -LiteralPath $runKey -ErrorAction SilentlyContinue }
+  }
+  if ($createdStartupDir -and -not (Get-ChildItem -LiteralPath $startupDir -Force -ErrorAction SilentlyContinue)) {
+    Remove-Item -LiteralPath $startupDir -ErrorAction SilentlyContinue
+  }
 }
 if ($envKey.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') -ne $origPath) { throw 'the original user PATH was not restored' }
 Assert-Canaries
