@@ -195,6 +195,7 @@ jobs:
           names of browser credential files, wallets and key stores in order to protect them, which
           resembles an information stealer to machine-learning detection. Check the SHA-256 and the
           attestation above. Code signing and false-positive submissions to Microsoft are planned.
+          Do not turn off Defender; see https://github.com/${REPO}/blob/main/docs/DEFENDER.md.
           EOF
 
       - name: publish
