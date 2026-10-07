@@ -92,8 +92,8 @@ manager; `oow update` and `oow remove` tell you the exact command.
 > **Known issue: antivirus false positive.** Microsoft Defender may flag `oow.exe` as malware.
 > `oow` lists the names of browser credential files, wallets and key stores in order to
 > protect them, which machine-learning detection can mistake for an information stealer.
-> Check the SHA-256 and the build attestation as shown above. Code signing and false-positive
-> submissions to Microsoft are planned.
+> Check the SHA-256 and the build attestation as shown above. Code signing
+> ([policy](docs/CODE_SIGNING.md)) and false-positive submissions to Microsoft are planned.
 > What to do, and what not to do, is in [docs/DEFENDER.md](docs/DEFENDER.md).
 
 **From source** with Go 1.26+:
