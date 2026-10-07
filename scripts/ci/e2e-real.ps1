@@ -265,10 +265,12 @@ try {
   & $Oow doctor
   if ($LASTEXITCODE -ne 0) { throw "doctor exited $LASTEXITCODE" }
 
+  # Elevated, so this includes DISM's read-only component store analysis (used again below).
   $opt = & $Oow optimize --dry-run --json | ConvertFrom-Json
-  if ($LASTEXITCODE -ne 0 -or $opt.schema -ne 'oow.optimize/v1' -or $opt.tasks.Count -ne 3 -or $null -ne $opt.results) { throw 'optimize dry run JSON is wrong' }
+  if ($LASTEXITCODE -ne 0 -or $opt.schema -ne 'oow.optimize/v1' -or $opt.tasks.Count -ne 4 -or $null -ne $opt.results) { throw 'optimize dry run JSON is wrong' }
   $opt.tasks | Format-Table @{n = 'task'; e = { $_.task.id } }, status, reason, bytes_before -AutoSize | Out-String -Width 200 | Write-Host
-  & $Oow optimize | Out-Null
+  # One task is enough to check the refusal, and it avoids a second DISM analysis.
+  & $Oow optimize --task dns-flush | Out-Null
   if ($LASTEXITCODE -ne 4) { throw "optimize without --yes exited $LASTEXITCODE, expected 4" }
 
   $st = & $Oow startup --json | ConvertFrom-Json
@@ -428,6 +430,81 @@ $ir = & $Oow installer $inst --yes --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $ir.summary.recycled -ne 1 -or $ir.summary.errors -ne 0) { throw "installer run failed: $($ir.summary | ConvertTo-Json -Compress)" }
 if (Test-Path -LiteralPath (Join-Path $inst 'FabrikamPlayerSetup-2.0.1.exe')) { throw 'installer not moved to the Recycle Bin' }
 Remove-Item -Path $fabKey -Recurse -Force
+Assert-Canaries
+Write-Host '::endgroup::'
+
+Write-Host '::group::component store (DISM) and Windows Update download cache: magnitude'
+# Read-only samples for the keep-or-kill thresholds written in docs/SAFETY.md
+# (section 3e). Then, on this disposable VM only, the real DISM cleanup when
+# DISM recommends it, watching every DISM command line for forbidden options.
+$cs = $opt.tasks | Where-Object { $_.task.id -eq 'optimize.component-store' }
+if (@('ready', 'not-applicable') -notcontains $cs.status) { throw "DISM's analysis did not parse on an elevated VM: $($cs.reason)" }
+$csb = $cs.component_store
+Write-Host ("MAGNITUDE component-store: actual {0:n2} GB, explorer {1:n2} GB, shared {2:n2} GB, backups and disabled features {3:n2} GB, cache {4:n2} MB, reclaimable packages {5}, recommended {6}, last cleanup {7}" -f `
+    ($csb.actual_bytes / 1GB), ($csb.explorer_bytes / 1GB), ($csb.shared_bytes / 1GB), ($csb.backups_bytes / 1GB), ($csb.cache_bytes / 1MB), $csb.reclaimable_packages, $csb.cleanup_recommended, $csb.last_cleanup)
+# DISM's own report, verbatim (a real fixture for the parser tests).
+$dismExe = Join-Path ([Environment]::SystemDirectory) 'Dism.exe'
+& $dismExe /Online /English /Cleanup-Image /AnalyzeComponentStore | ForEach-Object { Write-Host "DISM> $_" }
+
+# oow never cleans SoftwareDistribution\Download (no supported owner interface); measured only.
+$wuDownload = Join-Path $env:SystemRoot 'SoftwareDistribution\Download'
+$wu = @(Get-ChildItem -LiteralPath $wuDownload -Recurse -Force -File -ErrorAction SilentlyContinue)
+$wuBytes = [double](($wu | Measure-Object -Property Length -Sum).Sum)
+Write-Host ("MAGNITUDE wu-download-cache: {0:n1} MB in {1} files (read-only measurement)" -f ($wuBytes / 1MB), $wu.Count)
+
+function Read-Appended([string] $path, [long] $from) {
+  if (-not (Test-Path -LiteralPath $path)) { return '' }
+  $fs = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+  try {
+    if ($fs.Length -lt $from) { $from = 0 } # archived to dism.log.bak and restarted
+    $null = $fs.Seek($from, 'Begin')
+    $buf = New-Object byte[] ($fs.Length - $from)
+    $n = 0
+    while ($n -lt $buf.Length) { $r = $fs.Read($buf, $n, $buf.Length - $n); if ($r -le 0) { break }; $n += $r }
+  } finally { $fs.Dispose() }
+  if ($n -eq 0) { return '' }
+  $zeros = 0; for ($i = 1; $i -lt [Math]::Min($n, 512); $i += 2) { if ($buf[$i] -eq 0) { $zeros++ } }
+  if ($zeros -gt 64) { return [Text.Encoding]::Unicode.GetString($buf, 0, $n) }
+  return [Text.Encoding]::UTF8.GetString($buf, 0, $n)
+}
+
+if ($cs.status -eq 'ready') {
+  $dismLog = Join-Path $env:SystemRoot 'Logs\DISM\dism.log'
+  $logFrom = if (Test-Path -LiteralPath $dismLog) { (Get-Item -LiteralPath $dismLog).Length } else { 0 }
+  $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+  $outFile = Join-Path $tmp 'oow-component-store.json'
+  $errFile = Join-Path $tmp 'oow-component-store.err'
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $p = Start-Process -FilePath $Oow -ArgumentList 'optimize', '--task', 'component-store', '--yes', '--json' `
+    -RedirectStandardOutput $outFile -RedirectStandardError $errFile -NoNewWindow -PassThru
+  $null = $p.Handle # keeps ExitCode available after exit
+  $seen = @{}
+  while (-not $p.HasExited) {
+    foreach ($d in @(Get-CimInstance Win32_Process -Filter "Name = 'Dism.exe' OR Name = 'DismHost.exe'" -ErrorAction SilentlyContinue)) {
+      if ($d.CommandLine) { $seen["$($d.ProcessId)"] = $d.CommandLine }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  $p.WaitForExit()
+  $sw.Stop()
+  $seen.Values | ForEach-Object { Write-Host "DISM process: $_" }
+  $run = Get-Content -LiteralPath $outFile -Raw | ConvertFrom-Json
+  $r = $run.results | Where-Object { $_.id -eq 'optimize.component-store' }
+  $r | ConvertTo-Json -Depth 5 | Write-Host
+  Write-Host ("MAGNITUDE component-store cleanup: {0:n2} GB freed (actual {1:n2} GB -> {2:n2} GB) in {3:n1} min; restart required: {4}" -f `
+      ($r.freed_bytes / 1GB), ($r.bytes_before / 1GB), ($r.bytes_after / 1GB), $sw.Elapsed.TotalMinutes, [bool]$r.restart_required)
+  if ($p.ExitCode -ne 0 -or $r.status -ne 'done') { throw "component store cleanup failed (exit $($p.ExitCode)): $($r.message) $(Get-Content -LiteralPath $errFile -Raw)" }
+  $forbidden = '(?i)/(ResetBase|SPSuperseded|Defer)\b'
+  foreach ($c in $seen.Values) { if ($c -match $forbidden) { throw "forbidden DISM option used: $c" } }
+  if (-not ($seen.Values | Where-Object { $_ -match '(?i)/StartComponentCleanup' })) { Write-Host '::warning::the DISM cleanup finished before its command line could be observed' }
+  $log = Read-Appended $dismLog $logFrom
+  if ($log -match $forbidden) { throw 'dism.log shows a forbidden DISM option in this run' }
+  if ($log -notmatch '(?i)StartComponentCleanup') { Write-Host '::warning::dism.log does not mention StartComponentCleanup (log format or archiving changed)' }
+  $after = & $Oow optimize --task component-store --dry-run --json | ConvertFrom-Json
+  Write-Host "After the cleanup: $($after.tasks[0].status) ($($after.tasks[0].reason))"
+} else {
+  Write-Host "DISM does not recommend a cleanup on this VM: $($cs.reason)"
+}
 Assert-Canaries
 Write-Host '::endgroup::'
 
