@@ -61,7 +61,92 @@ downloaded separately and trust it as is. Rendering needs Chocolatey (`choco`) f
   and points at the amd64 zip and its SHA-256, and the `.nupkg` contains both.
 
 CI's `packages` job renders and validates on every push with stand-in zips (a stable and a
-pre-release version).
+pre-release version). The release workflow runs both on the real zips and attaches the result
+to the release as `oow-<VERSION>-package-manifests.zip`, listed in `SHA256SUMS` and covered by
+the attestation, so publishing is a copy step.
+
+## Publishing
+
+Only after the first release ([#12](https://github.com/Harshul1484/out-of-windows/issues/12)),
+and only for stable versions (no `-rc` or other pre-release). Package repositories scan
+submissions (winget-pkgs with Microsoft Defender, Chocolatey with VirusTotal), so first make
+sure the release binaries are not flagged, or that a false-positive submission has been
+cleared ([docs/DEFENDER.md](../docs/DEFENDER.md)); signing
+([#15](https://github.com/Harshul1484/out-of-windows/issues/15)) helps.
+
+**1. Get the files of the release** (here `1.2.3`) and verify them:
+
+```powershell
+$v = '1.2.3'
+gh release download "v$v" --repo Harshul1484/out-of-windows --pattern "oow-$v-package-manifests.zip" --pattern SHA256SUMS
+(Get-FileHash "oow-$v-package-manifests.zip" -Algorithm SHA256).Hash.ToLower()   # must equal its line in SHA256SUMS
+Select-String -Path SHA256SUMS -SimpleMatch "oow-$v-package-manifests.zip"
+gh attestation verify "oow-$v-package-manifests.zip" --repo Harshul1484/out-of-windows
+Expand-Archive "oow-$v-package-manifests.zip" -DestinationPath packages
+```
+
+**2. winget** (a pull request to `microsoft/winget-pkgs`, for the first and every later version):
+
+```powershell
+gh repo fork microsoft/winget-pkgs --clone=false            # once
+git clone --filter=blob:none --sparse https://github.com/<your-account>/winget-pkgs
+cd winget-pkgs
+git sparse-checkout set manifests/h/Harshul1484
+git switch -c "Harshul1484.oow-$v"
+Copy-Item -Recurse "..\packages\winget\manifests\h\Harshul1484\oow\$v" manifests\h\Harshul1484\oow\
+winget validate --manifest "manifests\h\Harshul1484\oow\$v"
+git add manifests/h/Harshul1484/oow
+git commit -m "New package: Harshul1484.oow version $v"      # later: "New version: Harshul1484.oow version $v"
+git push -u origin HEAD
+gh pr create --repo microsoft/winget-pkgs --web             # same title; complete the PR template's checklist
+```
+
+Optionally test first in Windows Sandbox: `winget settings --enable LocalManifestFiles` (as
+administrator), then `winget install --manifest <folder>`. The bots validate, install and scan
+the package; answer their labels on the pull request. Users then run
+`winget install Harshul1484.oow`.
+
+**3. Scoop** (a bucket of our own; the official Extras bucket only takes well-known apps, so
+propose `bucket/oow.json` there later, once it qualifies):
+
+```powershell
+gh repo create Harshul1484/scoop-bucket --public --template ScoopInstaller/BucketTemplate --clone   # once
+cd scoop-bucket
+Copy-Item ..\packages\scoop\oow.json bucket\oow.json
+git add bucket/oow.json
+git commit -m "oow: Add version $v"
+git push
+scoop bucket add harshul1484 https://github.com/Harshul1484/scoop-bucket   # test
+scoop install harshul1484/oow
+oow version
+```
+
+Once, follow the template's README: allow GitHub Actions with write permission, set the
+repository in `bin/auto-pr.ps1`, and add the `scoop-bucket` topic. Its Excavator workflow then
+follows new releases on its own through `checkver` and `autoupdate` (hashes from each
+release's `SHA256SUMS`), so later versions need no copy step. Users run the same two `scoop`
+commands.
+
+**4. Chocolatey** (the community repository; every version is a new push):
+
+```powershell
+# once: create an account at https://community.chocolatey.org and copy your API key
+choco apikey add --source https://push.chocolatey.org/ --key <api-key>
+# test in a clean Windows (e.g. Windows Sandbox) as administrator:
+choco install oow --source "$PWD\packages\chocolatey" -y    # downloads the release zip, checks its SHA-256
+oow version
+choco uninstall oow -y
+# publish:
+choco push "packages\chocolatey\oow.$v.nupkg" --source https://push.chocolatey.org/
+```
+
+The package then goes through Chocolatey's automated validation and verification and, for new
+packages, human moderation; follow up on the package page. Users run `choco install oow`.
+
+**5. Afterwards**: add the three install commands to the [README](../README.md#install), drop
+the "Not published" note above, tick the boxes in
+[#13](https://github.com/Harshul1484/out-of-windows/issues/13), and check that
+`oow update --check` on a package-managed copy names the right package-manager command.
 
 ## Files
 
