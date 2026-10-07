@@ -83,12 +83,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "termshot failed for $($p.Name)" }
             $w, $h = $size.Trim() -split 'x'
             $png = Join-Path $PWD "shots/$($p.Name).png"
-            & $chrome --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 "--window-size=$w,$h" "--screenshot=$png" "file:///$($html -replace '\\','/')" 2>$null
+            # Chrome is a GUI program: PowerShell does not wait for it unless asked.
+            Start-Process -FilePath $chrome -Wait -NoNewWindow -ArgumentList @(
+              '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=2',
+              "--window-size=$w,$h", "--screenshot=$png", "file:///$($html -replace '\\','/')")
             if (-not (Test-Path -LiteralPath $png)) { throw "no screenshot for $($p.Name)" }
             Write-Host "$($p.Name).png  ${w}x${h} css px"
           }
 
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: readme-screenshots
           path: shots/
