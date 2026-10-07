@@ -121,7 +121,8 @@ before the next begins.
       defers to winget/Scoop/Chocolatey, `GITHUB_TOKEN`/`GH_TOKEN` for private repositories
 - [x] `oow remove`: program (installer folder only), user PATH entry, settings and history to
       the Recycle Bin (`--keep-data` to keep them); defers to package managers
-- [x] winget, Scoop and Chocolatey templates (not published until the name is final)
+- [x] winget, Scoop and Chocolatey templates with the final identities (winget
+      `Harshul1484.oow`, Scoop and Chocolatey `oow`); not published before the first release
 - Not yet: Authenticode signing (needs a certificate) and automatic attestation checks in
   `oow update` (needs a Sigstore client); a running `oow.exe` cannot delete itself, so
   `oow remove` prints the final command

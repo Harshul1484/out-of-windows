@@ -1,6 +1,6 @@
 # Template, not published: see packaging/README.md.
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.10.0.schema.json
-PackageIdentifier: <PACKAGE_IDENTIFIER>
+PackageIdentifier: Harshul1484.oow
 PackageVersion: <VERSION>
 DefaultLocale: en-US
 ManifestType: version

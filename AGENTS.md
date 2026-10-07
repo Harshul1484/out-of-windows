@@ -158,8 +158,8 @@ arrives.
 - `scripts/ci/`: CI-only scripts (`e2e-real.ps1` performs a real cleanup and refuses to run
   outside CI).
 - `scripts/install.ps1`, `scripts/install.cmd`: per-user installer (SHA-256 verified, fails
-  closed, no admin). `packaging/`: winget, Scoop and Chocolatey templates, not published until
-  the name is final.
+  closed, no admin). `packaging/`: winget (`Harshul1484.oow`), Scoop and Chocolatey (`oow`)
+  templates, not published before the first release.
 - `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,
   PowerShell script parsing), `codeql.yml`, `release.yml` (tag-driven builds, `SHA256SUMS`,
   attestations, GitHub release; manual runs are dry runs).

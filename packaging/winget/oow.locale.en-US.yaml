@@ -1,9 +1,9 @@
 # Template, not published: see packaging/README.md.
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
-PackageIdentifier: <PACKAGE_IDENTIFIER>
+PackageIdentifier: Harshul1484.oow
 PackageVersion: <VERSION>
 PackageLocale: en-US
-Publisher: <PUBLISHER>
+Publisher: Harshul1484
 PublisherUrl: https://github.com/Harshul1484
 PackageName: out-of-windows
 PackageUrl: https://github.com/Harshul1484/out-of-windows
