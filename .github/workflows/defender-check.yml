@@ -26,8 +26,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Update-MpSignature -ErrorAction Continue
+          # Closer to a home PC on this disposable VM: cloud-delivered protection
+          # on (cloud lookups by file metadata), samples never sent.
+          try {
+            Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent NeverSend
+          } catch { Write-Host "::warning::could not turn on cloud protection: $_" }
+          $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          & $mpcmd -SignatureUpdate | Out-Host
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::MpCmdRun -SignatureUpdate exited $LASTEXITCODE; trying Microsoft Update"
+            Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Continue
+          }
           $s = Get-MpComputerStatus
+          if ($s.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
+            throw "security intelligence is from $($s.AntivirusSignatureLastUpdated), more than a day old; the scan would not reflect current detections"
+          }
           $p = Get-MpPreference
           $info = [ordered]@{
             'Engine'                  = $s.AMEngineVersion
