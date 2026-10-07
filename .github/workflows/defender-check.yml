@@ -1,0 +1,93 @@
+name: Defender check
+
+# Scans the files of a published release with Microsoft Defender on a fresh
+# GitHub-hosted VM, after updating its security intelligence, and reports any
+# detection (issue #18). It only reads: the scan runs with -DisableRemediation
+# so nothing is quarantined, and nothing is published or changed in the repo.
+#
+# A clean result here is a good sign, not proof: detections such as
+# Trojan:Win32/LummaStealer.DO!MTB come from machine-learning and cloud
+# protection, whose settings on a server runner can differ from a home PC.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to scan, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: windows-2025
+    steps:
+      - name: update Defender and record its versions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Update-MpSignature -ErrorAction Continue
+          $s = Get-MpComputerStatus
+          $p = Get-MpPreference
+          $info = [ordered]@{
+            'Engine'                  = $s.AMEngineVersion
+            'Antimalware client'      = $s.AMProductVersion
+            'Security intelligence'   = $s.AntivirusSignatureVersion
+            'Intelligence updated'    = $s.AntivirusSignatureLastUpdated
+            'Real-time protection'    = $s.RealTimeProtectionEnabled
+            'Cloud protection (MAPS)' = $p.MAPSReporting
+          }
+          $info.GetEnumerator() | ForEach-Object { Write-Host ("{0,-24} {1}" -f $_.Key, $_.Value) }
+          "## Microsoft Defender on the runner`n" >> $env:GITHUB_STEP_SUMMARY
+          "| | |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          $info.GetEnumerator() | ForEach-Object { "| $($_.Key) | $($_.Value) |" >> $env:GITHUB_STEP_SUMMARY }
+
+      - name: download the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "'$env:TAG' is not a release tag like v1.2.3" }
+          # Real-time protection may quarantine a file as it arrives; the
+          # scan step reports a file that disappeared as detected.
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir rel --skip-existing
+          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' | Set-Content assets.txt
+
+      - name: scan every release file
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          $rows = @()
+          $flagged = 0
+          foreach ($name in Get-Content assets.txt) {
+            $path = Join-Path (Resolve-Path rel) $name
+            if (-not (Test-Path -LiteralPath $path)) {
+              $rows += "| $name | removed on download (detected by real-time protection) |"
+              $flagged++
+              continue
+            }
+            $out = & $mpcmd -Scan -ScanType 3 -File $path -DisableRemediation 2>&1 | Out-String
+            Write-Host "== $name (exit $LASTEXITCODE)`n$out"
+            switch ($LASTEXITCODE) {
+              0 { $rows += "| $name | clean |" }
+              2 { $rows += "| $name | **detected** |"; $flagged++ }
+              default { $rows += "| $name | scan failed (exit $LASTEXITCODE) |"; $flagged++ }
+            }
+          }
+          $threats = Get-MpThreatDetection -ErrorAction SilentlyContinue | ForEach-Object {
+            $t = Get-MpThreat -ThreatID $_.ThreatID -ErrorAction SilentlyContinue
+            "| $($t.ThreatName) | $($_.Resources -join ', ') |"
+          }
+          "`n## Scan of $env:TAG`n" >> $env:GITHUB_STEP_SUMMARY
+          "| File | Result |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          $rows >> $env:GITHUB_STEP_SUMMARY
+          if ($threats) {
+            "`n| Detection | Resources |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
+            $threats >> $env:GITHUB_STEP_SUMMARY
+          }
+          if ($flagged -gt 0) { throw "$flagged file(s) of $env:TAG were detected or could not be scanned; see the summary" }
+          Write-Host "Every file of $env:TAG scanned clean."

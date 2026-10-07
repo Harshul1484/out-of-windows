@@ -100,6 +100,12 @@ each new build can be flagged again.
    & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <path> -DisableRemediation
    ```
 
+   Without downloading anything to your own machine: run the **Defender check** workflow
+   (Actions → Defender check → Run workflow, with the tag, e.g. `v0.1.0`). It updates Defender
+   on a fresh GitHub-hosted VM, scans every file of that release without quarantining it, and
+   lists the result in the run's summary. A clean result there is a good sign, not proof: the
+   machine-learning and cloud settings of a server runner can differ from a home PC.
+
 Package repositories scan submissions (winget-pkgs runs Defender, Chocolatey runs
 VirusTotal), so resolve a detection before publishing a release there; see
 [packaging/README.md](../packaging/README.md).
