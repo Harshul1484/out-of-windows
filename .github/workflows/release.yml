@@ -229,3 +229,45 @@ jobs:
             --notes-file notes.md \
             --generate-notes \
             "${flags[@]}"
+
+  verify-install:
+    name: install the published release
+    needs: [build, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - name: install as the README says, then check what was installed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The documented one-liner, with the installer from the tagged commit.
+          & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/$env:REPO/$env:SHA/scripts/install.ps1"))) -Version $env:VERSION
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\oow'
+          $exe = Join-Path $dir 'oow.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "oow.exe was not installed at $exe" }
+          $info = & $exe version --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $info.version -ne $env:VERSION) { throw "installed oow reports '$($info.version)', expected '$env:VERSION'" }
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not (($userPath -split ';') | Where-Object { $_.TrimEnd('\') -ieq $dir })) { throw "$dir is not on the user PATH" }
+          # The installed file is the published one: same SHA-256 as SHA256SUMS,
+          # and its build-provenance attestation verifies.
+          gh release download $env:TAG --repo $env:REPO --pattern SHA256SUMS --dir sums
+          if ($LASTEXITCODE -ne 0) { throw 'could not download SHA256SUMS' }
+          $line = Get-Content sums/SHA256SUMS | Where-Object { $_ -match "\s\*?oow-$([regex]::Escape($env:VERSION))-windows-amd64\.exe$" }
+          if (-not $line) { throw 'SHA256SUMS has no entry for the amd64 executable' }
+          $want = ($line -split '\s+')[0].ToLowerInvariant()
+          $got = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $want) { throw "installed oow.exe has SHA-256 $got, SHA256SUMS says $want" }
+          gh attestation verify $exe --repo $env:REPO
+          if ($LASTEXITCODE -ne 0) { throw 'the attestation of the installed oow.exe did not verify' }
+          & $exe doctor | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "oow doctor exited $LASTEXITCODE" }
+          Write-Host "Installed $($env:TAG): version, PATH, checksum and attestation verified."
