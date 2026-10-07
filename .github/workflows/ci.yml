@@ -52,7 +52,10 @@ jobs:
         shell: powershell
         run: *parse-ps
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go -C tools vet ./...
       - name: Windows resources match winres/
         shell: pwsh
         run: |
@@ -86,6 +89,33 @@ jobs:
         with:
           name: oow-windows-amd64
           path: bin/oow.exe
+
+  packages:
+    name: package manifests (winget, Scoop, Chocolatey)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: render and validate for a stand-in release
+        shell: pwsh
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          # The same render and validation the release runs, with fake zips:
+          # only their names and SHA-256 end up in the packages. A pre-release
+          # version is included to cover version handling in choco pack.
+          foreach ($v in '1.2.3', '1.2.3-rc.1') {
+            $dist = Join-Path $env:RUNNER_TEMP "dist-$v"
+            New-Item -ItemType Directory -Force $dist | Out-Null
+            foreach ($arch in 'amd64', 'arm64') {
+              [IO.File]::WriteAllText((Join-Path $dist "oow-$v-windows-$arch.zip"), "stand-in for the $arch zip of $v")
+            }
+            $out = Join-Path $env:RUNNER_TEMP "packages-$v"
+            ./packaging/render.ps1 -Version $v -Dist $dist -Out $out -Repo $env:REPO
+            ./packaging/validate.ps1 -Version $v -Dist $dist -Dir $out -Repo $env:REPO
+          }
 
   e2e-real:
     name: end-to-end on a real Windows Server 2025 VM

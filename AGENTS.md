@@ -89,6 +89,8 @@ arrives.
 - `AGENTS.md`: this contract. `CLAUDE.md` imports it with `@AGENTS.md`; do not copy rules into
   other agent files.
 - `cmd/oow/main.go`: entry point only. Business logic does not belong here.
+  `cmd/oow/winres/` holds the Windows version information and manifest (`asInvoker`), embedded
+  through the committed `rsrc_windows_*.syso`; after editing it, run `go generate ./cmd/oow`.
 - `internal/cli/`: command router, flags, text and JSON rendering, exit codes, home dispatch.
   One file per command (`clean.go`, `config_cmd.go`, `history_cmd.go`, ...); `json.go` holds
   the JSON schema types; `root.go` registers commands and the planned-command stubs.
@@ -156,13 +158,15 @@ arrives.
   `docs/JSON.md` (output schemas), `docs/ROADMAP.md`.
 - `SECURITY.md`: vulnerability reporting policy. `SECURITY_AUDIT.md`: security review notes.
 - `scripts/ci/`: CI-only scripts (`e2e-real.ps1` performs a real cleanup and refuses to run
-  outside CI).
+  outside CI; `check-exe-metadata.ps1` checks the embedded version information and manifest).
 - `scripts/install.ps1`, `scripts/install.cmd`: per-user installer (SHA-256 verified, fails
   closed, no admin). `packaging/`: winget (`Harshul1484.oow`), Scoop and Chocolatey (`oow`)
-  templates, not published before the first release.
+  templates, `render.ps1` and `validate.ps1`; not published before the first release.
+- `tools/`: a separate Go module for build and CI tools, so their dependencies stay out of the
+  product's module graph: `go-winres` (pinned tool) and `wingetcheck` (winget schema checks).
 - `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,
-  PowerShell script parsing), `codeql.yml`, `release.yml` (tag-driven builds, `SHA256SUMS`,
-  attestations, GitHub release; manual runs are dry runs).
+  PowerShell script parsing, resource and package checks), `codeql.yml`, `release.yml`
+  (tag-driven builds, `SHA256SUMS`, attestations, GitHub release; manual runs are dry runs).
 
 ## Commands
 
