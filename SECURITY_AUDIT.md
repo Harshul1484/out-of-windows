@@ -487,7 +487,9 @@ protected together with their ancestors (deleting a parent would delete them).
   files in Documents, Desktop, AppData and ProgramData plus a junction to Documents inside
   Temp, runs a real elevated `oow clean --yes`, and fails if any canary is touched, any junk
   survives, or any unexpected error occurs.
-- CodeQL analysis of Go code and Dependabot updates for Go modules and GitHub Actions.
+- CodeQL analysis of Go code (security-and-quality queries; results uploaded to the
+  repository's code scanning, and any finding fails the run) and Dependabot updates for Go
+  modules and GitHub Actions. Private vulnerability reporting is enabled (`SECURITY.md`).
 
 ## Testing coverage
 
@@ -573,9 +575,7 @@ developer's real system.
   the same release, so it proves the download matches the release, not that the release is
   authentic; the attestation proves that, but it is checked only by users
   (`gh attestation verify`), not automatically (that needs a Sigstore client). Binaries are
-  not Authenticode-signed yet (no certificate). Attestations need a public repository (or
-  GitHub Enterprise Cloud); until then a tag push fails at the attestation step, before
-  anything is published.
+  not Authenticode-signed yet (no certificate).
 - Microsoft Defender's machine-learning detection may flag `oow.exe` (and its test binaries)
   as an information stealer: the binary names credential stores, wallets and key files in
   order to protect them. It is a false positive; signing and submissions to Microsoft are the

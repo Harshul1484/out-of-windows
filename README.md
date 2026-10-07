@@ -67,8 +67,7 @@ From **Command Prompt**, run [`scripts/install.cmd`](scripts/install.cmd).
 
 The installer picks the build for your CPU (x64 or ARM64), checks its SHA-256 against the
 release's `SHA256SUMS` before writing anything and stops on any mismatch, installs to
-`%LOCALAPPDATA%\Programs\oow`, and adds that folder to your user PATH if it is missing. For a
-private repository, set `GITHUB_TOKEN` or `GH_TOKEN` first.
+`%LOCALAPPDATA%\Programs\oow`, and adds that folder to your user PATH if it is missing.
 
 **Manually**: download `oow-<version>-windows-amd64.zip` (or `arm64`) from
 [GitHub Releases](https://github.com/Harshul1484/out-of-windows/releases) and verify it:
