@@ -387,6 +387,14 @@ Keep edits narrow and run the listed tests when touching each area.
   that path is confirmed, and invite reopening if the problem persists.
 - For unreproducible reports, ask for `oow version --json` and the relevant command's `--json`
   output or `--debug` log, never for files that may contain private paths in public.
+- **Close issues through the change that fixes them.** The commit or PR that completes an
+  issue says `Closes #N` (one line per issue); GitHub closes it when the change reaches `main`.
+  Partial work says `Refs #N` and leaves the issue open. Do not close issues by hand for work
+  that is not on `main` with green CI.
+- **The project board updates itself** ([project 6](https://github.com/users/Harshul1484/projects/6)):
+  its built-in workflows add new issues and PRs from this repository as Todo, move closed items
+  to Done, close an issue whose card is set to Done, and move reopened items back to In Progress.
+  Set In Progress / In Review by hand only; never edit Done or closed state directly.
 
 ## Release
 
