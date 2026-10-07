@@ -265,12 +265,15 @@ try {
   & $Oow doctor
   if ($LASTEXITCODE -ne 0) { throw "doctor exited $LASTEXITCODE" }
 
-  # Elevated, so this includes DISM's read-only component store analysis (used again below).
   $opt = & $Oow optimize --dry-run --json | ConvertFrom-Json
   if ($LASTEXITCODE -ne 0 -or $opt.schema -ne 'oow.optimize/v1' -or $opt.tasks.Count -ne 4 -or $null -ne $opt.results) { throw 'optimize dry run JSON is wrong' }
-  $opt.tasks | Format-Table @{n = 'task'; e = { $_.task.id } }, status, reason, bytes_before -AutoSize | Out-String -Width 200 | Write-Host
-  # One task is enough to check the refusal, and it avoids a second DISM analysis.
-  & $Oow optimize --task dns-flush | Out-Null
+  $opt.tasks | Format-Table @{n = 'task'; e = { $_.task.id } }, status, selected, reason, bytes_before -AutoSize | Out-String -Width 200 | Write-Host
+  # The component store cleanup is opt-in: listed, not selected, DISM not started.
+  $optIn = $opt.tasks | Where-Object { $_.task.id -eq 'optimize.component-store' }
+  if ($optIn.status -ne 'ready' -or $optIn.selected -or $null -ne $optIn.component_store -or $optIn.reason -notlike 'opt-in:*') {
+    throw "component store task is not opt-in: $($optIn | ConvertTo-Json -Compress -Depth 4)"
+  }
+  & $Oow optimize | Out-Null
   if ($LASTEXITCODE -ne 4) { throw "optimize without --yes exited $LASTEXITCODE, expected 4" }
 
   $st = & $Oow startup --json | ConvertFrom-Json
@@ -437,8 +440,12 @@ Write-Host '::group::component store (DISM) and Windows Update download cache: m
 # Read-only samples for the keep-or-kill thresholds written in docs/SAFETY.md
 # (section 3e). Then, on this disposable VM only, the real DISM cleanup when
 # DISM recommends it, watching every DISM command line for forbidden options.
-$cs = $opt.tasks | Where-Object { $_.task.id -eq 'optimize.component-store' }
+# The task is opt-in: naming it is what starts DISM's analysis.
+$csDoc = & $Oow optimize --task component-store --dry-run --json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $csDoc.tasks.Count -ne 1) { throw "optimize --task component-store --dry-run exited $LASTEXITCODE" }
+$cs = $csDoc.tasks[0]
 if (@('ready', 'not-applicable') -notcontains $cs.status) { throw "DISM's analysis did not parse on an elevated VM: $($cs.reason)" }
+if ($cs.status -eq 'ready' -and -not $cs.selected) { throw 'a named, recommended component store cleanup is not selected' }
 $csb = $cs.component_store
 Write-Host ("MAGNITUDE component-store: actual {0:n2} GB, explorer {1:n2} GB, shared {2:n2} GB, backups and disabled features {3:n2} GB, cache {4:n2} MB, reclaimable packages {5}, recommended {6}, last cleanup {7}" -f `
     ($csb.actual_bytes / 1GB), ($csb.explorer_bytes / 1GB), ($csb.shared_bytes / 1GB), ($csb.backups_bytes / 1GB), ($csb.cache_bytes / 1MB), $csb.reclaimable_packages, $csb.cleanup_recommended, $csb.last_cleanup)
