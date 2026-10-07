@@ -511,6 +511,7 @@ protected together with their ancestors (deleting a parent would delete them).
 | Purge CLI (dry run zero-write, exit 4, JSON, history, folders, `OOW_DRY_RUN`) | `internal/cli/purge_test.go` |
 | Installers by content, never by name; exact installed matching; Recycle Bin re-verification | `internal/installer/installer_test.go`, `internal/cli/installer_test.go` |
 | Real purge and installer runs on a VM | `scripts/ci/e2e-real.ps1` (tracked `dist`, recent project, junction to Documents, deployment key, look-alike installers) |
+| Real scheduled tasks and shortcuts on a VM: a broken sign-in task listed and switched off and on through its Enabled flag (task otherwise unchanged, other tasks untouched), a task keeping a leftover folder until it is unregistered, a broken Start menu shortcut as evidence, the uninstalled app's own shortcut recycled with its folder while the all-users one stays | `scripts/ci/e2e-real.ps1` (uninstall group; scheduled tasks and broken shortcuts group) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.
