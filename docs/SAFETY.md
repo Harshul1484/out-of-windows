@@ -231,6 +231,14 @@ anything under the Windows folder itself; the reviewed tasks are listed in
 
 **Component store (WinSxS): `optimize.component-store`, through DISM only.**
 
+- **Opt-in.** By the recovery-contract rule the task is opt-in: it has a visible cost (minutes
+  for the analysis, possibly over an hour for the cleanup), and Windows' own
+  `StartComponentCleanup` scheduled task already does the same work. It is never preselected.
+  Unless `--task component-store` (or `optimize.component-store`) names it, the plan lists it as
+  `ready`, unselected, with the reason, and **DISM is not started at all**: `oow optimize --yes`
+  never runs it and an elevated `--dry-run` stays fast. The elevated-window offer passes it on
+  only when the user named it. Naming it runs the analysis in the plan and preselects the task
+  when DISM recommends a cleanup.
 - **Measure first, read-only.** `Dism.exe /Online /English /Cleanup-Image
   /AnalyzeComponentStore`, started from System32 by full path (`GetSystemDirectory`, never
   PATH), hidden, never through a shell. It needs administrator rights, so without elevation it
@@ -243,9 +251,13 @@ anything under the Windows folder itself; the reviewed tasks are listed in
   the whole report unreadable: the task is `unavailable` with the cause, nothing is shown as
   zero, and nothing runs. Sizes accept DISM's two-decimal format with either decimal mark and
   thousands grouping; UTF-16 output is decoded.
-- **Act only on DISM's own recommendation.** `Recommended: No` makes the task
-  `not-applicable`. Only `Yes` makes it `ready`, and then oow runs exactly `Dism.exe /Online
-  /English /Quiet /NoRestart /Cleanup-Image /StartComponentCleanup`. `/NoRestart` is required
+- **Act only on DISM's own, fresh recommendation.** In a named plan, `Recommended: No` makes the
+  task `not-applicable`. A plan-time analysis is never trusted on its own: right before acting,
+  including when the task was ticked in the list without any analysis, oow analyzes again and runs
+  the cleanup only if that report says `Yes`. Otherwise nothing runs: the result is `skipped`
+  with "DISM does not recommend it now", or `failed` when that analysis fails. Then oow runs
+  exactly `Dism.exe /Online /English /Quiet /NoRestart /Cleanup-Image /StartComponentCleanup`.
+  `/NoRestart` is required
   because DISM may restart Windows by itself under `/Quiet`. **Never used:** `/ResetBase`
   (installed updates could no longer be uninstalled), `/SPSuperseded` (service packs could no
   longer be uninstalled) and `/Defer`. A unit test pins both command lines, and the CI run
@@ -268,7 +280,10 @@ anything under the Windows folder itself; the reviewed tasks are listed in
   task. A second Ctrl+C exits oow without waiting; DISM still finishes, and that run is not
   recorded in history.
 - **Sandbox.** The simulated DISM serves report text through the same parser; a simulated
-  cleanup swaps in the "after" report and counts the run. Tests never start DISM, except the
+  cleanup swaps in the "after" report and counts the run. Each simulated run's command line is
+  recorded in `dism-calls.log` at the sandbox root (outside the simulated drive and registry, so
+  previews leave the simulated system unchanged), which is how tests check that `--yes` alone
+  never starts DISM and that the cleanup follows a fresh analysis. Tests never start DISM, except the
   read-only real-system test (`OOW_TEST_REAL_SYSTEM=1`), which only runs the analysis: without
   elevation DISM refuses at once (error 740, no prompt).
 
@@ -382,5 +397,5 @@ show bytes removed and the *measured* change in free space.
 | Installers identified by content, exact installed matching, Recycle Bin | `installer/installer_test.go` |
 | DISM report parsed from fixtures; localized, cut-off, error and malformed reports never become zero or "recommended" | `optimize` `TestParseComponentStoreReport`, `TestParseComponentStoreReportFailsClosed`, `TestParseDISMSize` |
 | DISM command lines fixed (never `/ResetBase`, `/SPSuperseded`, `/Defer`) | `optimize` `TestDISMCommandLines` |
-| Component store task: admin only, runs only on DISM's recommendation, Ctrl+C leaves DISM to finish | `optimize` `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreCancelLeavesDISMToFinish`; `cli` `TestOptimizeUnreadableDISMReportNeverRuns` |
+| Component store task: opt-in (DISM not started unless named; `--yes` alone never runs it), admin only, fresh analysis right before acting (also when ticked), runs only on DISM's recommendation, Ctrl+C leaves DISM to finish | `optimize` `TestComponentStoreIsOptIn`, `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreTickedWithoutAnalysis`, `TestRunComponentStoreRechecksBeforeActing`, `TestRunComponentStoreCancelLeavesDISMToFinish`; `cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeSandboxRunnerRechecksBeforeActing`, `TestOptimizeUnreadableDISMReportNeverRuns` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |

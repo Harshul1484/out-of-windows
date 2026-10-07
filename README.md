@@ -138,7 +138,8 @@ oow processes --sort memory --top 10
 oow doctor               # diagnose free space, restarts, updates, PATH, startup, network (changes nothing)
 oow startup              # choose which programs start at sign-in (reversible, like Task Manager)
 oow startup disable "Contoso Agent" --dry-run
-oow optimize --dry-run   # DNS flush, Delivery Optimization cache, SSD retrim, component store (DISM): what, why, effect
+oow optimize --dry-run   # DNS flush, Delivery Optimization cache, SSD retrim: what, why, effect
+oow optimize --task component-store   # opt-in: DISM component store cleanup (administrator)
 oow repair --dry-run     # fix user PATH and broken startup entries (PATH backed up first)
 oow history              # what was removed and when
 ```

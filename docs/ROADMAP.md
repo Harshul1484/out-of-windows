@@ -86,9 +86,10 @@ before the next begins.
       disk pressure shown for information only
 - [x] `oow repair`: user PATH (missing, duplicate, empty entries; `.reg` backup first) and broken
       startup entries; the system PATH is reported, never changed
-- [x] Component store (WinSxS) through DISM only: read-only analysis first, cleanup only when DISM
-      recommends it (`/StartComponentCleanup`, never `/ResetBase`), measured again afterwards,
-      never interrupted (#20)
+- [x] Component store (WinSxS) through DISM only, opt-in (`--task component-store` or chosen in
+      the list): a fresh read-only analysis right before acting, cleanup only when DISM recommends
+      it (`/StartComponentCleanup`, never `/ResetBase`), measured again afterwards, never
+      interrupted (#20)
 - Not planned: winsock or network stack resets, restarting Explorer, Windows Update download
   cache deletion (no supported owner interface; see [SAFETY.md](SAFETY.md) §3e), registry tweaks
 - Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API)

@@ -297,11 +297,17 @@ These commands delete no user files. What each one may change, and how:
 
 ### Component store (DISM) and the Windows Update download cache
 
+- **Opt-in.** `optimize.component-store` is never preselected (visible cost, and Windows' own
+  scheduled `StartComponentCleanup` task does the same). Unless `--task` names it, DISM is not
+  started at all: the plan lists it as ready and unselected with the reason, `oow optimize --yes`
+  never runs it, and the elevated-window offer does not pass it on.
 - **Owner tool only, fixed command lines.** `optimize.component-store` starts
   `%WINDIR%\System32\Dism.exe` by full path (`GetSystemDirectory`, never PATH or a shell), hidden,
   with exactly `/Online /English /Cleanup-Image /AnalyzeComponentStore` (read-only) and, only when
-  that report says `Component Store Cleanup Recommended : Yes`, `/Online /English /Quiet
-  /NoRestart /Cleanup-Image /StartComponentCleanup`. `/ResetBase`, `/SPSuperseded`, `/Defer`,
+  an analysis run right before it says `Component Store Cleanup Recommended : Yes`, `/Online
+  /English /Quiet /NoRestart /Cleanup-Image /StartComponentCleanup`. A plan-time analysis is never
+  trusted on its own; a fresh one that says `No` or fails means nothing runs (`skipped` or
+  `failed`, with the reason). `/ResetBase`, `/SPSuperseded`, `/Defer`,
   `/RestoreHealth` and `/RevertPendingActions` are never used; `/NoRestart` keeps DISM from
   restarting Windows under `/Quiet`. A 32-bit build refuses rather than run the WOW64 DISM.
   `oow` itself deletes nothing in WinSxS.
@@ -491,8 +497,8 @@ protected together with their ancestors (deleting a parent would delete them).
 | Optimize: admin tasks skipped without elevation, only ready tasks run, cancellation | `internal/optimize/optimize_test.go` |
 | DISM report parsing from fixtures (Microsoft's documented sample, a captured refusal, recommended, locale numbers, localized, cut off, pending operations, UTF-16, malformed values); never zero or "recommended" when unknown | `internal/optimize/dism_test.go`, `TestParseDISMSize` |
 | DISM command lines fixed, never `/ResetBase`, `/SPSuperseded` or `/Defer` | `internal/optimize` `TestDISMCommandLines` |
-| Component store task: needs-admin without elevation (DISM not started), runs only on DISM's recommendation, failure, restart, unmeasured result, Ctrl+C leaves DISM to finish and starts nothing after | `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreCancelLeavesDISMToFinish` |
-| Component store CLI: sandbox plan, run, history, unreadable report never runs | `internal/cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeComponentStoreText`, `TestOptimizeUnreadableDISMReportNeverRuns` |
+| Component store task: opt-in (DISM not started unless named), needs-admin without elevation (DISM not started), fresh analysis right before acting (also when ticked without one), runs only on DISM's recommendation (else skipped or failed), failure, restart, unmeasured result, Ctrl+C during the analysis or the cleanup | `TestComponentStoreIsOptIn`, `TestPlanComponentStore`, `TestRunComponentStore`, `TestRunComponentStoreTickedWithoutAnalysis`, `TestRunComponentStoreRechecksBeforeActing`, `TestRunComponentStoreCancelLeavesDISMToFinish` |
+| Component store CLI and sandbox runner: `--yes` alone never starts DISM, named run analyzes, re-analyzes, cleans and measures (simulated DISM command lines checked), not recommended at run time is skipped, history, unreadable report never runs | `internal/cli` `TestOptimizePreviewConfirmAndRun`, `TestOptimizeSandboxRunnerRechecksBeforeActing`, `TestOptimizeComponentStoreText`, `TestOptimizeUnreadableDISMReportNeverRuns` |
 | Real DISM: analysis parses on CI (refusal 740 without elevation); cleanup on the VM with every DISM command line and `dism.log` checked for forbidden options | `TestRealSystemComponentStoreAnalysis`, `scripts/ci/e2e-real.ps1` (component store group) |
 | Write-access probe creates nothing | `internal/system/probe_test.go` `TestCanCreateInDoesNotWrite` |
 | Startup/doctor/optimize/repair CLI: dry run and doctor change nothing, exit 4 without `--yes`, `OOW_DRY_RUN`, history | `internal/cli/system6_test.go` |
