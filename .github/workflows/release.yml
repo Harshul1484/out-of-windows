@@ -33,11 +33,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # Full history, so the tagged commit can be checked against main.
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # No shared build cache for release binaries.
           cache: false
+
+      - name: tagged commit is on main
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          git merge-base --is-ancestor $env:SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "the tag points at $env:SHA, which is not on main; releases are cut from main only"
+          }
 
       - name: resolve version
         id: version
