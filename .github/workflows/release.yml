@@ -83,6 +83,12 @@ jobs:
           $date = git log -1 --format=%cI   # commit time, so rebuilds are reproducible
           $pkg = 'github.com/Harshul1484/out-of-windows/internal/buildinfo'
           $ldflags = "-s -w -X $pkg.Version=$env:VERSION -X $pkg.Commit=$env:COMMIT -X $pkg.Date=$date -X $pkg.Repo=$env:REPO"
+          # Stamp the release version into the Windows version resource: the
+          # committed cmd/oow/rsrc_windows_*.syso carry the development
+          # version. (Go therefore records vcs.modified=true in the binaries'
+          # build info; nothing else in the checkout changes.)
+          go tool -C tools go-winres make --in ../cmd/oow/winres/winres.json --out ../cmd/oow/rsrc --arch amd64,arm64 --file-version $env:VERSION --product-version $env:VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'go-winres failed to stamp the version resource' }
           New-Item -ItemType Directory -Force dist, stage | Out-Null
           $env:GOOS = 'windows'
           $env:CGO_ENABLED = '0'
@@ -107,6 +113,10 @@ jobs:
           if ($info.version -ne $env:VERSION) { throw "built binary reports version '$($info.version)', expected '$env:VERSION'" }
           if ($info.commit -eq 'none') { throw 'commit was not stamped into the binary' }
           Write-Host "oow $($info.version) ($($info.commit)) built $($info.built)"
+          # Version information and manifest of every build, arm64 included.
+          foreach ($arch in 'amd64', 'arm64') {
+            ./scripts/ci/check-exe-metadata.ps1 -Exe "dist/oow-$env:VERSION-windows-$arch.exe" -Version $env:VERSION
+          }
 
       - name: checksums
         shell: pwsh
