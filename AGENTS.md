@@ -327,7 +327,7 @@ These are interfaces users and scripts depend on. Changing them is a compatibili
 
 Keep edits narrow and run the listed tests when touching each area.
 
-- `internal/safety/guard.go`: protection policy. Run `go test ./internal/safety` and both fuzz
+- `internal/safety/guard.go`: protection policy. Run `go test ./internal/safety` and its fuzz
   targets for at least 30s. Every new location needs positive and negative tests.
 - `internal/filesystem/remove_windows.go`: the deletion sink. Run `go test ./internal/filesystem`
   (junction-swap, locked, read-only, changed, permission-denied, fence cases must stay).
