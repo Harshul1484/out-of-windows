@@ -164,6 +164,10 @@ func Seed(root string) error {
 	if err := seedApps(root, l); err != nil {
 		return err
 	}
+	// Developer projects (purge) and installer packages (installer).
+	if err := seedPhase7(root, l); err != nil {
+		return err
+	}
 
 	// Junctions that cleanup must never follow: one inside Temp, and a fake
 	// browser "profile" that points at Documents.
