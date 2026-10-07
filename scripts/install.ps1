@@ -146,7 +146,7 @@ function Install-Oow {
         throw "Could not put the new $name.exe in place ($($_.Exception.Message)). Close any running $name and run the installer again."
     }
     if (-not (Test-Path -LiteralPath $exe)) {
-        throw "$exe disappeared right after it was written. Microsoft Defender may have flagged it: this is a known false positive (see the README). The SHA-256 above matched the release."
+        throw "$exe disappeared right after it was written. Microsoft Defender may have flagged it: this is a known false positive, see https://github.com/$repo/blob/main/docs/DEFENDER.md (do not turn Defender off). The SHA-256 above matched the release."
     }
     $check = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($check -ne $expected) { throw "$exe does not match the verified download (got $check). Do not run it; reinstall." }

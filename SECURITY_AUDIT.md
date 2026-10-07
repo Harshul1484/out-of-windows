@@ -494,7 +494,9 @@ developer's real system.
 - Microsoft Defender's machine-learning detection may flag `oow.exe` (and its test binaries)
   as an information stealer: the binary names credential stores, wallets and key files in
   order to protect them. It is a false positive; signing and submissions to Microsoft are the
-  planned fixes.
+  planned fixes, and strings are never obfuscated to evade it. Binaries carry Windows version
+  information and an `asInvoker` manifest (checked in CI). See
+  [docs/DEFENDER.md](docs/DEFENDER.md) for verification and the submission process.
 - A running program cannot delete its own file on Windows, so `oow remove` leaves `oow.exe`
   and prints the exact command that removes it (and its empty folder) after exit.
 - Cache locations of third-party apps are taken from their documented or long-standing

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest of oow.exe, embedded by go-winres (see winres.json).
+
+  asInvoker: oow never asks for administrator rights as a whole; the few
+  operations that need them relaunch one command through the UAC prompt.
+
+  No activeCodePage: Go calls the UTF-16 Windows APIs, so a UTF-8 ANSI code
+  page would gain nothing, and the shortcut parser (internal/startup) decodes
+  the ANSI strings of .lnk files with the system code page they were written in.
+
+  longPathAware matches what the Go runtime already does at start-up when long
+  paths are enabled on the system.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and Windows 11 (and Windows Server 2016 and later) -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
