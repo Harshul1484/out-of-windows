@@ -18,18 +18,51 @@ internal/
   cli/                   cobra commands, JSON schemas, exit codes, home dispatch
   cleanup/               Rule registry, Scan (read-only), Execute (verified)
   safety/                Normalize, Locations, Guard; DiscoverLocations (Known Folders)
-  filesystem/            Walk (no link following), RemoveVerified, FinalPath, fence
+  filesystem/            Walk (no link following), RemoveVerified, RecycleVerified,
+                         FinalPath, fence
+  apps/                  installed apps (registry, AppX, Scoop, Chocolatey), names
+  uninstall/             uninstall plans, Runner (the app's own uninstaller), Checker
+  leftovers/             evidence, claims, Find with confidence, Recycle
+  analyzer/              parallel read-only disk scanner, largest files
+  monitor/               read-only metrics (process table, per-core, PDH, GPU)
+  startup/               Run/RunOnce and Startup folder entries, .lnk parser,
+                         StartupApproved enable/disable
+  envpath/               PATH analysis, .reg backup, compare-and-swap user PATH write
+  doctor/                read-only probes and checks
+  optimize/              bounded maintenance tasks through owner interfaces
+  repair/                user PATH and startup fixes found by doctor
+  purge/                 project artifact discovery (markers, Git), verified removal
+  installer/             installer packages identified by content, Recycle
+  selfupdate/            GitHub releases, SHA256SUMS, staged replacement
+  install/               installer folder, package-manager detection, PATH entry
+  elevation/             one elevated relaunch per operation (UAC), Shell execution
   config/                config.json (whitelist, preferences), directories
   history/               append-only history.jsonl
   logging/               slog → %LOCALAPPDATA%\oow\logs\oow.log (+stderr with --debug)
-  system/                OS version, elevation, CPU/memory/disk, processes
+  system/                OS version, elevation, CPU/memory/disk, processes, Recycle Bin
   ui/                    styles (NO_COLOR aware), formatting, prompts, spinner,
-                         Bubble Tea checklist and home screen
+                         Bubble Tea checklist, home screen, explorer, status dashboard
   sandbox/               simulated Windows layout + seeding for e2e testing
   testutil/              sandbox/fence setup for tests, fixtures, file locking
 docs/                    this file, SAFETY.md, JSON.md, ROADMAP.md
-scripts/ci/              CI-only end-to-end scripts
+scripts/                 install.ps1 / install.cmd; ci/ holds CI-only end-to-end scripts
+packaging/               winget, Scoop and Chocolatey templates
 ```
+
+## Where changes happen
+
+Every change to the machine goes through one of these sinks; review them line by line.
+
+| Change | Sink | Guard purpose | Used by |
+|---|---|---|---|
+| Permanent file and folder deletion | `filesystem.RemoveVerified` | `PurposeCleanup` (rule scope), `PurposePurge` (artifact scope) | `clean`, `purge` (preselected), `update` and `remove` (own executable, exact path via `install.RemoveOwnFile`), sandbox simulations |
+| Move to the Recycle Bin | `filesystem.RecycleVerified` | `PurposeUserSelected`, `PurposeLeftover`, `PurposePurge`, `PurposeSelfRemove` | `analyze`, `installer`, `leftovers`, `purge` (from review), `remove` |
+| Empty the Recycle Bin | `system.RecycleBin` (`SHEmptyRecycleBinW`) | — | `clean` (Recycle Bin rule) |
+| App uninstall | `uninstall.Runner` (the app's own uninstaller) | — | `uninstall` |
+| StartupApproved values | `startup.SetEnabled` → `Store.SetApproval` (read back) | — | `startup`, `repair` |
+| User `Path` value | `envpath.Store.WriteUser` (compare-and-swap) | — | `repair`, `remove` |
+| Maintenance tasks | `optimize.Runner` (DNS API, owner cmdlets) | — | `optimize` |
+| Executable replacement | `selfupdate` (rename aside, never overwrite) | — | `update` |
 
 The suggested `cmd/<command>` layout is realised as `internal/cli/<command>.go`: Go's
 convention is one `cmd/<binary>` per executable, and keeping commands internal prevents

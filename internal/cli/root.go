@@ -110,6 +110,8 @@ func newRootCmd(app *App) *cobra.Command {
 		newCleanCmd(app),
 		newUninstallCmd(app),
 		newLeftoversCmd(app),
+		newPurgeCmd(app),
+		newInstallerCmd(app),
 		newAnalyzeCmd(app),
 		newStatusCmd(app),
 		newProcessesCmd(app),
@@ -205,10 +207,9 @@ type planned struct {
 	aliases                  []string
 }
 
-var plannedCommands = []planned{
-	{"installer", "Find installer files you no longer need", "Phase 7", "clean", nil},
-	{"purge", "Remove rebuildable developer artifacts (node_modules, target, ...)", "Phase 7", "clean", nil},
-}
+// plannedCommands lists commands announced but not built yet; each exits
+// with ExitNotImplemented. Every planned command has shipped.
+var plannedCommands = []planned{}
 
 func newPlannedCmd(app *App, p planned) *cobra.Command {
 	return &cobra.Command{

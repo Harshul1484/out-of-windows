@@ -441,6 +441,122 @@ History records written by `startup`, `optimize` and `repair` carry
 `changes: [{"id", "name", "action", "status", "detail", "error"}]` (`action`: `disabled`,
 `enabled`, `ran`, `removed-path-entry`; `status`: `changed`, `skipped`, `failed`, `partial`).
 
+## `oow purge --json` — `oow.purge/v1`
+
+```json
+{
+  "schema": "oow.purge/v1",
+  "dry_run": true,
+  "sandbox": false,
+  "roots": [
+    { "path": "C:\\Users\\me\\source\\repos", "source": "default", "status": "ok" },
+    { "path": "D:\\old", "source": "config", "status": "missing", "reason": "does not exist" }
+  ],
+  "projects": [
+    {
+      "path": "C:\\Users\\me\\source\\repos\\webapp",
+      "markers": ["package.json"],
+      "repository": "C:\\Users\\me\\source\\repos\\webapp",
+      "artifacts": [
+        {
+          "path": "C:\\Users\\me\\source\\repos\\webapp\\node_modules", "kind": "node_modules",
+          "label": "installed npm packages", "ecosystem": "Node.js", "bytes": 412000000, "files": 38201,
+          "newest_change": "2026-08-20T10:00:00Z", "status": "ready", "selected": true, "reasons": [],
+          "rebuild": "npm install (or yarn / pnpm install)",
+          "result": { "method": "deleted", "removed_files": 38201, "removed_dirs": 4100,
+                      "reclaimed_bytes": 412000000, "recycled_files": 0, "recycled_bytes": 0,
+                      "complete": true, "skipped": 0, "skip_reasons": [], "errors": 0 }
+        },
+        {
+          "path": "C:\\Users\\me\\source\\repos\\webapp\\dist", "kind": "js-output",
+          "label": "JavaScript build output", "ecosystem": "Node.js", "bytes": 52000, "files": 3,
+          "newest_change": "2026-09-01T10:00:00Z", "status": "kept", "selected": false,
+          "reasons": ["contains files tracked by Git"], "rebuild": "your build script (for example npm run build)"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "projects": 14, "artifacts": 15, "reclaimable_bytes": 2100000000, "selected": 13,
+    "selected_bytes": 2000000000, "kept": 4, "scan_errors": 0, "executed": false, "removed": 0,
+    "removed_files": 0, "reclaimed_bytes": 0, "recycled": 0, "recycled_bytes": 0,
+    "freed_on_disk_bytes": 0, "skipped": 0, "errors": 0, "cancelled": false, "scan_ms": 2100,
+    "purge_ms": 0
+  }
+}
+```
+
+- `roots[].source`: `argument`, `config` or `default`; `status`: `ok`, `missing` or `refused`
+  (with `reason`). Default folders that do not exist are omitted.
+- `kind`: `node_modules`, `next`, `nuxt`, `svelte-kit`, `turbo`, `parcel-cache`, `angular`,
+  `js-output` (dist/build/out), `cargo-target`, `maven-target`, `gradle-build`, `gradle-cache`,
+  `cmake-build`, `dotnet-bin`, `dotnet-obj`, `pycache`, `pytest-cache`, `mypy-cache`, `ruff-cache`,
+  `tox`, `venv`, `dart-tool`.
+- `status`: `ready` (selected by default), `review` (offered but not selected: recent activity,
+  dist/build/out without Git-ignore evidence, unusual bin/obj layout), `kept` (never deleted:
+  Git-tracked files, nested repository, links, cloud-only or sensitive files, unreadable parts,
+  Git unavailable, refused by the guard). `reasons` explains every non-ready status.
+- `repository` is the folder holding `.git`, absent when the project is not in one.
+- `summary.artifacts` and `reclaimable_bytes` count `ready` and `review` artifacts.
+- `result` appears only for artifacts that a real run handled; `kept` in it names why the whole
+  folder was left alone at deletion time. `method` is `deleted` (preselected artifacts, deleted
+  permanently file by file) or `recycled` (artifacts added from review, moved whole to the
+  Recycle Bin; `recycled_files`/`recycled_bytes`), absent when kept.
+- `summary.removed` counts artifacts deleted completely, `summary.recycled` those moved to the
+  Recycle Bin (`recycled_bytes`); `reclaimed_bytes` counts only deleted bytes.
+- Without a terminal, `--yes` deletes exactly the artifacts with `selected: true`; review
+  artifacts can only be added interactively.
+- History records use `"command": "purge"` with one target per artifact (`id` is its path);
+  `recycled_bytes` holds what was moved to the Recycle Bin.
+
+## `oow purge --paths --json` / `oow config purge --json` — `oow.purge-paths/v1`
+
+`{"schema", "config_file", "configured": ["D:\\code"], "roots": [{"path", "source", "status",
+"reason"}]}`: the configured folders and the folders a plain `oow purge` would scan.
+`oow config purge add|remove --json` prints the same document after the change.
+
+## `oow installer --json` — `oow.installer/v1`
+
+```json
+{
+  "schema": "oow.installer/v1",
+  "dry_run": true,
+  "sandbox": false,
+  "folders": [ { "path": "C:\\Users\\me\\Downloads", "status": "ok" } ],
+  "installers": [
+    {
+      "path": "C:\\Users\\me\\Downloads\\FabrikamPlayerSetup-2.0.1.exe", "name": "FabrikamPlayerSetup-2.0.1.exe",
+      "type": "exe", "format": "setup program", "engine": "Inno Setup",
+      "product": "Fabrikam Player", "version": "2.0.1", "publisher": "Fabrikam, Inc.",
+      "evidence": ["Inno Setup installer data", "version resource FileDescription: Fabrikam Player Setup"],
+      "size": 48000000, "modified": "2026-08-27T09:12:00Z", "age_days": 40,
+      "installed": { "status": "installed", "app": "Fabrikam Player", "app_id": "reg:hkcu:FabrikamPlayer",
+                     "version": "2.0.1", "match": "product name" },
+      "status": "ready", "selected": true, "reasons": []
+    }
+  ],
+  "warnings": [],
+  "summary": {
+    "installers": 8, "bytes": 310000000, "selected": 3, "selected_bytes": 120000000, "scan_errors": 0,
+    "executed": false, "recycled": 0, "recycled_bytes": 0, "skipped": 0, "errors": 0,
+    "cancelled": false, "scan_ms": 900
+  }
+}
+```
+
+After a real run (`--yes`) a `recycled` object is added:
+`{"recycled": [{"path", "size"}], "bytes", "skipped": [{"path", "reason"}], "errors"}`.
+
+- `type`: `msi`, `msp`, `msix` (MSIX/APPX), `msixbundle`, `exe`, `zip` (archive with an installer
+  at its root), `iso`. `product_code` (MSI) and `package_identity` (MSIX) appear when known.
+- `installed.status`: `installed` (exact match; `match` is `product code`, `package identity` or
+  `product name`), `not-found` (no installed app matches exactly) or `unknown` (archives, disc
+  images, patches, or the app list could not be read; see `warnings`).
+- `status`: `ready` (installed and older than 7 days: selected by default) or `review`
+  (`reasons` says why: not installed, unknown, recent, newer than the installed version, disc
+  image without setup files).
+- History records use `"command": "installer"` and `recycled_bytes`.
+
 ## `oow config --json` — `oow.config/v1`
 
 `{"schema", "config_file", "data_dir", "sandbox", "config": {"version", "whitelist":

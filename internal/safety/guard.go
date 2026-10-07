@@ -59,7 +59,68 @@ const (
 	// only when it is not critical, whitelisted, sensitive, in a system tree
 	// or in user content.
 	PurposeSelfRemove
+	// PurposePurge is a rebuildable project artifact (node_modules, target,
+	// .venv, ...) the user reviewed: deleted permanently when preselected, moved
+	// to the Recycle Bin when the user added it from review. Scope must be
+	// the artifact folder (see ValidatePurgeArtifact): a known build or
+	// dependency folder name inside a project, outside system trees, AppData
+	// and tool folders in the profile. The path must be that folder or lie
+	// inside it, never inside a .git folder, and never be a sensitive file
+	// type except inside an installed package (see IsPurgeSensitive).
+	PurposePurge
 )
+
+// purgeArtifactNames are the only folder names (patterns) PurposePurge may
+// use as a scope. The purge scanner adds per-ecosystem evidence on top.
+var purgeArtifactNames = []string{
+	"node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache", ".angular",
+	"dist", "build", "out", "target", ".gradle", "bin", "obj",
+	"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".venv", "venv",
+	".dart_tool", "build-*", "cmake-build-*",
+}
+
+// purgePackageStores are artifacts whose contents come from a package
+// registry. Below their top level, file names such as cacert.pem or key.pem
+// are package content (CA bundles, test fixtures), not the user's keys.
+var purgePackageStores = []string{"node_modules", ".venv", "venv", ".tox"}
+
+// purgeProfileDeny lists folders directly inside the user profile (patterns,
+// one per path component) that hold tool or package-manager state rather
+// than projects: dot folders (.vscode\extensions, .cargo, .nuget, ...),
+// AppData, Scoop apps, the Go module cache and Conda installations.
+var purgeProfileDeny = [][]string{{".*"}, {"appdata"}, {"scoop"}, {"go", "pkg"}, {"anaconda3"}, {"miniconda3"}}
+
+// IsPurgeArtifactName reports whether a folder name may be a purge scope.
+func IsPurgeArtifactName(name string) bool {
+	return matchAny(purgeArtifactNames, name)
+}
+
+// IsPurgePackageStore reports whether an artifact folder name is a package
+// store (node_modules, virtual environments).
+func IsPurgePackageStore(name string) bool {
+	return matchAny(purgePackageStores, name)
+}
+
+// IsPurgeSensitive reports whether a file called name, depth levels inside
+// an artifact folder called artifact (1 = directly inside), must never be
+// purged: any sensitive file type in build output, and in package stores
+// any sensitive file type placed directly in the store's top folder.
+func IsPurgeSensitive(artifact string, depth int, name string) bool {
+	if !IsSensitiveName(name) {
+		return false
+	}
+	return !IsPurgePackageStore(artifact) || depth < 2
+}
+
+func matchAny(patterns []string, name string) bool {
+	lower := strings.ToLower(name)
+	for _, p := range patterns {
+		if ok, _ := filepath.Match(p, lower); ok {
+			return true
+		}
+	}
+	return false
+}
 
 // LeftoverRoot is a location where applications keep their files.
 type LeftoverRoot struct {
@@ -95,6 +156,10 @@ type Request struct {
 	// Scope, when set, is a root returned by ValidateRoot. The path must lie
 	// strictly inside it.
 	Scope string
+	// Dir says the path is a directory, as verified by the caller through a
+	// handle. Only PurposePurge uses it: sensitive file-type names apply to
+	// files, not to package folders such as node_modules\history.
+	Dir bool
 }
 
 // Decision is the guard's answer. Reason is user-facing when not allowed.
@@ -130,6 +195,8 @@ type Guard struct {
 	sensitive   []location // credentials, keys, wallets, VM and AI-tool state
 	leftover    []LeftoverRoot
 	windowsDir  string
+	appData     []location // AppData roots: application state, never projects
+	profile     string     // normalized user profile, "" when unknown
 }
 
 // LeftoverRoots returns where app leftovers may be found, most specific
@@ -200,6 +267,107 @@ func (g *Guard) checkLeftover(p, scope string) Decision {
 		class = ClassSystem
 	}
 	return Decision{Allowed: true, Class: class}
+}
+
+// ValidatePurgeArtifact checks that path may serve as the scope of
+// PurposePurge and returns its normalized form. A valid artifact folder has a
+// known build or dependency folder name; its parent (the project) is not a
+// drive root and not itself a never-remove location (profile, Documents,
+// ...); it neither is nor contains a protected, system or sensitive location;
+// and it lies outside system trees, AppData and tool folders in the profile.
+// User content (Documents\GitHub, Desktop) is allowed: projects live there.
+func (g *Guard) ValidatePurgeArtifact(path string) (string, error) {
+	a, err := Normalize(path)
+	if err != nil {
+		return "", fmt.Errorf("unrecognized path (%v)", err)
+	}
+	if IsUNC(a) {
+		return "", fmt.Errorf("%s is a network path; project folders are purged on local drives only", a)
+	}
+	if IsVolumeRoot(a) {
+		return "", fmt.Errorf("%s is a drive root", a)
+	}
+	parts := splitNonEmpty(a[3:])
+	if !IsPurgeArtifactName(parts[len(parts)-1]) {
+		return "", fmt.Errorf("%s is not a known build or dependency folder", a)
+	}
+	parent := a[:3] + strings.Join(parts[:len(parts)-1], `\`)
+	if IsVolumeRoot(parent) {
+		return "", fmt.Errorf("%s is at the top of a drive; projects there are not purged", a)
+	}
+	for _, list := range [][]location{g.critical, g.system, g.protected, g.sensitive} {
+		for _, c := range list {
+			if IsWithin(c.path, a) {
+				return "", fmt.Errorf("%s contains the %s (%s)", a, c.label, c.path)
+			}
+		}
+	}
+	for _, c := range g.critical {
+		if Key(c.path) == Key(parent) {
+			return "", fmt.Errorf("%s is directly inside the %s, which is not a project folder", a, c.label)
+		}
+	}
+	if s, ok := g.containing(g.system, a); ok {
+		return "", fmt.Errorf("%s is inside the %s", a, s.label)
+	}
+	if w, ok := g.containing(g.protected, a); ok {
+		return "", fmt.Errorf("protected: %s is %s", w.path, w.label)
+	}
+	if s, ok := g.containing(g.sensitive, a); ok {
+		return "", fmt.Errorf("sensitive: %s holds %s", s.path, s.label)
+	}
+	if d, ok := g.containing(g.appData, a); ok {
+		return "", fmt.Errorf("%s is inside %s, which holds application state, not projects", a, d.label)
+	}
+	if g.profile != "" && IsStrictlyWithin(a, g.profile) {
+		rel := splitNonEmpty(a)[len(splitNonEmpty(g.profile)):]
+		for _, pat := range purgeProfileDeny {
+			if len(rel) < len(pat) {
+				continue
+			}
+			match := true
+			for i, p := range pat {
+				if ok, _ := filepath.Match(p, strings.ToLower(rel[i])); !ok {
+					match = false
+					break
+				}
+			}
+			if match {
+				return "", fmt.Errorf("%s is inside %s\\%s, which holds tool or package-manager state, not projects",
+					a, g.profile, strings.Join(rel[:len(pat)], `\`))
+			}
+		}
+	}
+	return a, nil
+}
+
+func (g *Guard) checkPurge(p, scope string, dir bool) Decision {
+	if strings.TrimSpace(scope) == "" {
+		return deny(ClassOrdinary, "purging requires the build or dependency folder the path belongs to")
+	}
+	s, err := g.ValidatePurgeArtifact(scope)
+	if err != nil {
+		return deny(ClassOrdinary, "%v", err)
+	}
+	if !IsWithin(p, s) {
+		return deny(ClassOrdinary, "%s is outside %s", p, s)
+	}
+	rel := splitNonEmpty(p)[len(splitNonEmpty(s)):]
+	for _, r := range rel {
+		if strings.EqualFold(r, ".git") {
+			return deny(ClassProtected, "%s is inside a Git repository folder", p)
+		}
+	}
+	if !dir && len(rel) > 0 && IsPurgeSensitive(baseName(s), len(rel), rel[len(rel)-1]) {
+		return deny(ClassSensitive, "sensitive file type: %s is never purged", rel[len(rel)-1])
+	}
+	if sys, ok := g.containing(g.system, p); ok {
+		return deny(ClassSystem, "%s is inside the %s", p, sys.label)
+	}
+	if _, ok := g.containing(g.userContent, p); ok {
+		return Decision{Allowed: true, Class: ClassUserContent}
+	}
+	return Decision{Allowed: true, Class: ClassOrdinary}
 }
 
 // sensitiveNames are file name patterns that automatic cleanup never removes,
@@ -385,6 +553,16 @@ func NewGuard(locs Locations, userProtected []string) *Guard {
 		}
 	}
 
+	if locs.UserProfile != "" {
+		g.appData = appendLoc(g.appData, locs.UserProfile+`\AppData`, "AppData", false)
+		if n, err := Normalize(locs.UserProfile); err == nil && !IsVolumeRoot(n) {
+			g.profile = n
+		}
+	}
+	g.appData = appendLoc(g.appData, locs.RoamingAppData, "Roaming AppData", false)
+	g.appData = appendLoc(g.appData, locs.LocalAppData, "Local AppData", false)
+	g.appData = appendLoc(g.appData, locs.LocalLow, "LocalLow AppData", false)
+
 	for _, p := range locs.SelfDirs {
 		g.protected = appendLoc(g.protected, p, "used by "+toolDirLabel, false)
 		g.self = appendLoc(g.self, p, "used by "+toolDirLabel, false)
@@ -483,6 +661,9 @@ func (g *Guard) Check(req Request) Decision {
 	}
 	if req.Purpose == PurposeLeftover {
 		return g.checkLeftover(p, req.Scope)
+	}
+	if req.Purpose == PurposePurge {
+		return g.checkPurge(p, req.Scope, req.Dir)
 	}
 
 	if req.Purpose == PurposeCleanup && strings.TrimSpace(req.Scope) == "" {

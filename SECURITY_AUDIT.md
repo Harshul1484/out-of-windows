@@ -1,6 +1,6 @@
 # Security Audit
 
-Status: **v0.1.0-dev (Phases 1–5)**. This document records what the code does today. Planned
+Status: **v0.1.0-dev (Phases 1–8)**. This document records what the code does today. Planned
 controls are listed separately under *Known limitations and future work*; nothing in the
 other sections is aspirational. Update this file in the same change as any safety-relevant
 code.
@@ -29,7 +29,7 @@ Highest risk, in order:
    self-update and self-removal*).
 
 Lower risk: read-only commands (`history`, `config`, `version`, the home screen) and the
-planned `analyze` flow (user-chosen items, Recycle Bin).
+`analyze` flow (user-chosen items, Recycle Bin).
 
 Out of scope for the threat model: an attacker who already runs code as the user or as
 administrator, or who can replace `oow.exe`.
@@ -117,7 +117,7 @@ guard, not in rules. Current list (all admin-only, all also cleaned by Windows D
 
 Desktop, Documents, Downloads, Pictures, Music, Videos, Favorites, Saved Games, Contacts,
 Links, OneDrive (Known Folder and `OneDrive*` environment roots), and the Public equivalents.
-A user may delete items there explicitly (planned analyzer, Recycle Bin).
+A user may delete items there explicitly (analyzer and installers, through the Recycle Bin).
 
 ### Sensitive data (never deleted, for any purpose)
 
@@ -294,6 +294,45 @@ These commands delete no user files. What each one may change, and how:
   (startup values, PATH values, system facts, task state); the simulated Delivery Optimization
   cache is emptied through `filesystem.RemoveVerified`, confined to the cache folder and the fence.
 
+### Project artifacts (purge) and installer packages
+
+- **Purge scope.** Only folders passed as arguments, configured `purge.paths`, or existing default
+  project folders in the profile are scanned; roots that are links, system trees, AppData,
+  sensitive or protected locations, other users' profiles or the system drive are refused. The
+  walk is depth-bounded, never follows links and skips dot folders, `node_modules`, vendored code
+  and `Package Cache`. An artifact needs its project's marker file next to it; folders holding
+  project markers are never artifacts, and artifacts are never searched for more projects.
+- **Keep rules** (evaluated at scan time and again right before deletion): Git-tracked files
+  (`git ls-files --cached` with `:(top,literal,icase)` pathspecs), nested `.git`, links and
+  junctions, cloud-only placeholders, unreadable subfolders, sensitive file types (in package
+  stores only at the top level). Git runs with `core.fsmonitor=false`, `core.hooksPath=NUL`,
+  `GIT_OPTIONAL_LOCKS=0`, no inherited `GIT_*` variables and a timeout; it only reads. A missing
+  or failing Git keeps every artifact inside a repository (fail closed). Recent activity (7 days)
+  and dist/build/out without Git-ignore evidence are never preselected; `--yes` takes only the
+  preselection.
+- **Preselected: permanent deletion, verified per file; added from review: Recycle Bin.**
+  Preselected artifacts (full evidence; the only ones `--yes` takes) are deleted permanently
+  (rebuildable data; the Shell path is impractically slow, quota-limited and verifies only the
+  top folder). Artifacts the user adds from review (weaker evidence or recent activity) are moved
+  whole to the Recycle Bin through `RecycleVerified`; without a Recycle Bin they are kept, never
+  deleted. Each artifact is first re-verified (same folder by creation time, not a link, guard,
+  fresh walk with no new or changed files since the scan, Git again); then each file goes through
+  `RemoveVerified` and folders are removed deepest first (or the folder is recycled), every final
+  path checked with `PurposePurge` scoped to the artifact: known artifact name, parent not a drive root or never-remove location, outside
+  system trees, AppData and profile tool folders (dot folders, `scoop`, `go\pkg`, Conda), never
+  inside `.git`, never a sensitive file type outside package internals, never whitelisted or
+  protected. A parent swapped for a junction after the scan resolves outside the scope and is
+  refused at the sink (tested).
+- **Installers** are identified by content (compound-file class ID, MSIX manifest, PE structure
+  with setup-engine data or a setup version resource read with `GetFileVersionInfo`, ZIP root
+  entries, ISO root directory), never by name or extension alone; MSI properties are read with the
+  read-only Windows Installer database API; cloud placeholders are never opened. Search is
+  limited to Downloads, Desktop and Documents (or user-given folders outside system trees and
+  AppData, so `Windows\Installer` and `Package Cache` are never touched), 3 levels deep, skipping
+  links and repositories. Only packages whose product is installed (exact ProductCode, MSIX
+  identity or normalized name) and older than 7 days are preselected. Removal goes to the Recycle
+  Bin through `RecycleVerified` with `PurposeUserSelected`. Every run is recorded in history.
+
 ### Tool-owned and whitelisted locations
 
 `oow`'s own config and data directories, and every path in the user's whitelist, are
@@ -424,14 +463,22 @@ protected together with their ancestors (deleting a parent would delete them).
 | Write-access probe creates nothing | `internal/system/probe_test.go` `TestCanCreateInDoesNotWrite` |
 | Startup/doctor/optimize/repair CLI: dry run and doctor change nothing, exit 4 without `--yes`, `OOW_DRY_RUN`, history | `internal/cli/system6_test.go` |
 | Real StartupApproved write/read-back, `.lnk` parsing of Shell-made shortcuts, user PATH repair with backup (CI only) | `scripts/ci/e2e-real.ps1` (startup, doctor, optimize, repair group) |
+| Purge guard purpose (scope, traversal, `.git`, sensitive files, AppData, tool folders, whitelist) | `internal/safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
+| Purge discovery and keep rules (tracked files, nested repos, links, keys, vendor, recent, ambiguous) | `internal/purge` `TestFindInSandbox`, `TestRemoveDeletesOnlySelected` |
+| Purge review artifacts go to the Recycle Bin (kept without one), preselected ones are deleted | `TestReviewArtifactsGoToTheRecycleBin`, `TestReviewArtifactWithoutRecycleBinIsKept` |
+| Purge fail closed (Git missing or failing), changes and junction swaps after the scan, sink refusal | `TestGitMissingKeepsRepositoryArtifacts`, `TestGitFailureKeepsArtifacts`, `TestChangesAfterScanAreKept`, `TestSinkRefusesPathsOutsideTheArtifact`, `TestGitPathspecsAreLiteral` |
+| Purge CLI (dry run zero-write, exit 4, JSON, history, folders, `OOW_DRY_RUN`) | `internal/cli/purge_test.go` |
+| Installers by content, never by name; exact installed matching; Recycle Bin re-verification | `internal/installer/installer_test.go`, `internal/cli/installer_test.go` |
+| Real purge and installer runs on a VM | `scripts/ci/e2e-real.ps1` (tracked `dist`, recent project, junction to Documents, deployment key, look-alike installers) |
 
 All file-creating tests run inside `.sandbox/` with the deletion fence set; none touch the
 developer's real system.
 
 ## Known limitations and future work
 
-- Cache and temp cleanup is permanent (no undo); this is limited to regenerable data. User
-  files (analyzer, installers, purge) will go to the Recycle Bin.
+- Cache and temp cleanup, and purge of preselected project artifacts, are permanent (no
+  undo); this is limited to regenerable data. User-chosen files (analyzer, installers,
+  leftovers, purge artifacts added from review) go to the Recycle Bin.
 - Identity is checked by type, size and timestamps rather than file ID; a same-size rewrite
   that also restores both timestamps would pass the identity check (the final-path and guard
   checks still apply).
@@ -454,9 +501,9 @@ developer's real system.
   layouts; when an app changes its layout the rule finds nothing (it never widens).
 - Vendor uninstallers are third-party programs: `oow` controls when they run and verifies the
   result, not what they do. Scheduled tasks are not yet used as claims.
-- Planned with their own reviews: disk analyzer deletion via the Recycle Bin, purge safety rules (Git-tracked
-  content, nested repositories, recent activity), `optimize` tasks through supported Windows
-  APIs only (Delivery Optimization, Windows Update cache, component store).
+- Not implemented, each needing its own review: `optimize` tasks for the Windows Update
+  cache and the component store (DISM). Installer packages' Authenticode signatures are
+  noted but not verified (detection relies on content, not on the signature).
 - Threat modelling of elevated uninstall flows (running vendor uninstallers) is pending.
 
 To report a problem, see [SECURITY.md](SECURITY.md).

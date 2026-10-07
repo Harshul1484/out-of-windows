@@ -63,6 +63,7 @@ func newConfigCmd(app *App) *cobra.Command {
 		},
 	})
 	cmd.AddCommand(newWhitelistCmd(app))
+	cmd.AddCommand(newConfigPurgeCmd(app))
 	return cmd
 }
 

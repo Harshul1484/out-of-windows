@@ -116,7 +116,91 @@ on discovery succeeding.
   Recycle Bin are refused rather than deleted from. Only high-confidence leftovers are
   preselected, and `--yes` takes only those.
 
-### 3c. Updating and removing oow itself
+### 3c. Project artifacts (purge) and installer packages
+
+**Purge discovery.** `oow purge` scans only the folders passed on the command line, else
+`purge.paths` from the configuration, else the usual project folders in the profile that exist
+(`source\repos`, `Projects`, `dev`, `code`, `src`, `workspace`, `repos`, `GitHub`,
+`Documents\GitHub`). A scan root must be a real folder (not a link, final path equal to its
+path) outside system trees, AppData, sensitive and protected locations, other users' profiles,
+and must not be the system drive or contain the whole profile. The walk is bounded (8 levels),
+never follows links, and never enters dot folders, `node_modules`, vendored code (`vendor`,
+`third_party`, `external`, `deps`, `Pods`, ...), `Package Cache` or guard-protected locations.
+
+**What counts as an artifact.** Only a folder with a known name *next to its project's marker
+file*: `node_modules`, `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.parcel-cache`, `.angular` and
+`dist`/`build`/`out` (package.json); `target` (Cargo.toml or pom.xml); `build` and `.gradle`
+(Gradle files); `bin`/`obj` (a .csproj/.fsproj/.vbproj); `.venv`/`venv` (pyvenv.cfg inside and a
+Python marker); `__pycache__` (only compiled files, anywhere in a Python project),
+`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`; `.dart_tool` (pubspec.yaml); CMake build
+trees (`build`, `build-*`, `cmake-build-*` with CMakeCache.txt inside). A folder that itself
+holds project markers is a project, never an artifact, and a found artifact is never searched
+for more projects. Go `vendor` and other directly consumed stores are never targets.
+
+**Kept, whatever the user selects** (re-checked right before deletion):
+
+- Git-tracked content: `git ls-files --cached` with literal, case-insensitive pathspecs anchored at
+  the repository root, run with `core.fsmonitor=false`, hooks disabled and inherited `GIT_*`
+  variables dropped (so repository configuration cannot run programs or redirect Git). If the
+  project is inside a repository and Git is missing or fails, the folder is kept (fail closed).
+- A nested repository (`.git` anywhere inside), links or junctions (pnpm and workspace links:
+  links are never followed or deleted, so such a folder could only be removed partially),
+  cloud-only placeholders, unreadable subfolders.
+- Sensitive files (`safety.IsSensitiveName`: keys, certificates, wallets, VM disks): anywhere in
+  build output; in package stores (`node_modules`, `.venv`, `venv`, `.tox`) only directly in the
+  store's top folder, because deeper such names are package content (certifi's `cacert.pem`,
+  test fixtures).
+
+**Listed but not selected**: anything changed (created or written) in the last 7 days; `dist`,
+`build` and `out` of JavaScript projects unless Git ignores them; `bin`/`obj` without MSBuild's
+layout. `--yes` takes only the default selection.
+
+**Removal method: preselected artifacts are deleted, artifacts added from review are
+recycled.** Artifacts with full evidence (`ready`, preselected; the only ones `--yes` takes) are
+deleted permanently through the verified sink. Artifacts the user adds from review (`review`:
+dist/build/out without Git-ignore evidence, recent activity, unusual layout) rest on weaker
+evidence, so they are moved to the Recycle Bin as a whole folder with
+`filesystem.RecycleVerified` (handle-verified identity, link and fence checks, final path
+approved by `PurposePurge` with the artifact as scope) after the same re-checks; on a drive
+without a Recycle Bin such a folder is kept with that reason, never deleted.
+
+Why preselected artifacts are not recycled: the folders are rebuilt by the project's
+own commands (the same recovery contract as caches); the Shell's Recycle Bin path is
+impractically slow for folders of 100,000+ small files and such folders often exceed the bin's
+size quota (the Shell then offers to delete permanently anyway); a recycled `node_modules`
+would not free any space; and the Recycle Bin path verifies only the top folder before handing
+the whole tree to the Shell, whereas the verified sink checks every file.
+
+For each chosen artifact `purge.Remove` first re-checks: same folder (not a link, same creation
+time), guard approval, a fresh walk that finds no `.git`, link, cloud-only or sensitive file and
+nothing created or modified since the scan, and Git again. A preselected artifact is then
+deleted file by file with `filesystem.RemoveVerified` (identity, link, cloud and fence checks
+through the deleting handle) and folders deepest first; an artifact added from review is moved
+whole with `filesystem.RecycleVerified`. Every final path is checked with **`PurposePurge`**: the scope must be the artifact folder, whose name must be a
+known artifact name and whose parent must be a project folder (not a drive root, the profile or
+a user-content root), outside system trees, AppData and tool folders in the profile (`.vscode`,
+`.cargo`, `.nuget`, other dot folders, `scoop`, `go\pkg`, Conda). The path must lie inside that
+folder, never inside a `.git` folder, and must not be a sensitive file type (except deep in a
+package store, as above). User content is allowed (projects live in `Documents\GitHub`), the
+whitelist and protected locations are not.
+
+**Installers** (`oow installer`) are identified by content; a name or extension only decides
+which files are opened. MSI/MSP: OLE compound file whose root storage carries the Windows
+Installer class ID (product details read with the Windows Installer database API, read-only).
+MSIX/APPX and bundles: ZIP with `AppxManifest.xml` or `AppxBundleManifest.xml`. Setup programs:
+a PE executable (not a DLL) with Inno Setup, NSIS, WiX Burn, InstallShield or Advanced Installer
+data, or a version resource (read with `GetFileVersionInfo`) that says setup or installer. ZIP
+archives only with such an installer at their root; ISO images only with `setup.exe`,
+`autorun.inf` or an MSI at their root (other images are review-only). Cloud placeholders are
+never opened. Searching covers Downloads, Desktop and Documents (Known Folders) or folders the
+user passes, 3 levels deep, skipping links, repositories, dot folders, `node_modules` and
+`Package Cache`; system trees and AppData are refused because installer caches there are needed
+for repair and uninstall. Installed state is an exact match (MSI ProductCode, MSIX identity, or
+normalized product name with or without its publisher prefix; generic names never match). Only
+installed packages older than 7 days are preselected. Confirmed packages go to the Recycle Bin
+through the verified recycle sink with `PurposeUserSelected`.
+
+### 3d. Updating and removing oow itself
 
 - **The tool's own folders** stay protected for every purpose except `PurposeSelfRemove`,
   used only by `oow remove`: it allows exactly one of the config or data folders (never a
@@ -129,9 +213,11 @@ on discovery succeeding.
   (the installer's folder, from the Known Folder API). A running program cannot delete its own
   file, so `oow remove` uses no self-deletion technique: it prints the command that removes
   the file and the then-empty folder after exit.
-- **Registry**: the only value written is the user `Path` (`HKCU\Environment`), only to drop
-  entries equal to the installer's folder; every other entry is kept verbatim, the value type
-  is preserved, and the write is refused if the value changed after it was read.
+- **Registry**: `oow update` writes none. `oow remove` writes only the user `Path`
+  (`HKCU\Environment`), only to drop entries equal to the installer's folder, through the same
+  `envpath.Store` compare-and-swap writer as `oow repair`: every other entry is kept verbatim,
+  the value type is preserved, the write is refused if the value changed after it was read,
+  and the value is read back afterwards.
 - **Update** replaces the executable only with a download whose SHA-256 matches the release's
   `SHA256SUMS` (fail closed). The old file is renamed aside, never overwritten, and removed on
   the next start through `RemoveVerified` with an exact final-path check. Package-managed
@@ -181,9 +267,10 @@ test nor a sandbox run can delete anything outside its folder, whatever the code
 Interactive runs show the report, a checklist (with What/Why/After for the focused target)
 and a `[y/N]` confirmation that defaults to No. Non-interactive runs refuse to delete without
 `--yes` (exit code 4). `OOW_DRY_RUN=1` turns every destructive command into a preview,
-whatever flags are passed. Cache and temp cleanup deletes permanently because the data is
-regenerated; user files (analyzer, installers) will go to the Recycle Bin, and permanent
-deletion of user files will require typing a confirmation word.
+whatever flags are passed. Cache and temp cleanup and preselected project artifacts are deleted
+permanently because the data is regenerated (see §3c for why); user files (analyzer,
+installers, leftovers) and project artifacts the user adds from review go to the Recycle Bin,
+and permanent deletion of user files will require typing a confirmation word.
 
 Every real run is appended to `history.jsonl` with per-target counts and skip reasons. Reports
 show bytes removed and the *measured* change in free space.
@@ -203,4 +290,7 @@ show bytes removed and the *measured* change in free space.
 | Dry run changes nothing | `cleanup` `TestDryRunChangesNothing`, `cli` `TestCleanDryRunJSONChangesNothing` |
 | Fence cannot be widened and blocks deletion | `TestFenceCannotBeWidened`, `TestFenceBlocksDeletionOutside` |
 | Real system paths and 8.3 names protected | `safety/realsystem_test.go` (CI) |
+| Purge purpose: scope, traversal, `.git`, sensitive files, AppData and tool folders | `safety` `TestPurgePurpose`, `TestValidatePurgeArtifact`, `FuzzPurgeScope` |
+| Purge discovery, keep rules, Git fail-closed, junction swaps, changes after scan, review artifacts recycled (kept without a Recycle Bin) | `purge/purge_test.go` |
+| Installers identified by content, exact installed matching, Recycle Bin | `installer/installer_test.go` |
 | Real cleanup with canary files | `scripts/ci/e2e-real.ps1` (CI only) |

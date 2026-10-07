@@ -91,10 +91,22 @@ before the next begins.
 - Later: logon-triggered scheduled tasks in `oow startup` (needs the Task Scheduler COM API);
   the Windows Update download cache and component store through owner tools
 
-## Phase 7 — Developer tools
+## Phase 7 — Developer tools ✅
 
-- [ ] `oow purge`: node_modules, target, build, .next, .venv… with project/Git safety rules
-- [ ] `oow installer`: identifiable installer packages in Downloads/Desktop/…
+- [x] `oow purge`: node_modules, .next, .nuxt, .svelte-kit, .turbo, .parcel-cache, .angular,
+      dist/build/out, target (Cargo, Maven), Gradle build and .gradle, bin/obj (.NET), Python
+      caches, .tox and virtual environments, .dart_tool, CMake build trees; only next to their
+      project's marker file, in configured or usual project folders
+- [x] Purge safety: Git-tracked content (literal pathspecs, fail closed without Git), nested
+      repositories, links, cloud-only and sensitive files kept; recent activity and ambiguous
+      folders unselected; preselected artifacts deleted permanently file by file under a
+      dedicated guard purpose, artifacts added from review moved to the Recycle Bin
+- [x] `oow purge --paths`, `oow config purge add|remove`
+- [x] `oow installer`: MSI/MSP, MSIX/APPX, setup programs (Inno Setup, NSIS, WiX Burn,
+      InstallShield, version resources), ZIP and ISO identified by content in Downloads, Desktop
+      and Documents; exact installed-app matching; Recycle Bin
+- Not planned: purging folders that contain links (pnpm, npm workspaces) — remove those with
+  the package manager; ISO images without an ISO 9660 setup file (UDF-only media) are review-only
 
 ## Phase 8 — Distribution ✅
 
