@@ -8,12 +8,18 @@ name: Defender check
 # A clean result here is a good sign, not proof: detections such as
 # Trojan:Win32/LummaStealer.DO!MTB come from machine-learning and cloud
 # protection, whose settings on a server runner can differ from a home PC.
+#
+# It runs every day on the latest release, so its status badge shows when a
+# false-positive submission to Microsoft has taken effect:
+# https://github.com/Harshul1484/out-of-windows/actions/workflows/defender-check.yml
 on:
+  schedule:
+    - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to scan, e.g. v0.1.0"
-        required: true
+        description: "Release tag to scan, e.g. v0.1.0 (empty: the latest release)"
+        required: false
 
 permissions:
   contents: read
@@ -67,16 +73,20 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "'$env:TAG' is not a release tag like v1.2.3" }
+          # A scheduled run has no input: scan the latest release.
+          $tag = $env:TAG
+          if (-not $tag) { $tag = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "'$tag' is not a release tag like v1.2.3" }
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
           # Real-time protection may quarantine a file as it arrives; the
           # scan step reports a file that disappeared as detected.
-          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir rel --skip-existing
-          gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' | Set-Content assets.txt
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --dir rel --skip-existing
+          gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name' | Set-Content assets.txt
 
       - name: scan every release file
         shell: pwsh
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
           $rows = @()
