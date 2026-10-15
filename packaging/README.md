@@ -132,7 +132,19 @@ follows new releases on its own through `checkver` and `autoupdate` (hashes from
 release's `SHA256SUMS`), so later versions need no copy step. Users run the same two `scoop`
 commands.
 
-**4. Chocolatey** (the community repository; every version is a new push):
+**4. Chocolatey** (the community repository; every version is a new push). The usual route
+needs no Chocolatey on your machine:
+
+1. Once, create an account at <https://community.chocolatey.org>, copy your API key (Account >
+   API Keys) and store it as the repository secret `CHOCOLATEY_API_KEY` (Settings > Secrets
+   and variables > Actions > New repository secret). The key never goes into a file or a
+   command line.
+2. For each stable release, after the Defender check passes for it: Actions > **Publish
+   Chocolatey** > Run workflow, with the tag (e.g. `v1.2.3`). It downloads
+   `oow-<VERSION>-package-manifests.zip`, verifies it against `SHA256SUMS` and its
+   attestation, and pushes the `.nupkg` inside.
+
+By hand instead, from a machine with Chocolatey:
 
 ```powershell
 # once: create an account at https://community.chocolatey.org and copy your API key

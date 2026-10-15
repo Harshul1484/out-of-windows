@@ -1,0 +1,64 @@
+name: Publish Chocolatey
+
+# Pushes the Chocolatey package of a published release to the community
+# repository (issue #13). Manual only: run it once the Defender check passes
+# for that release, because Chocolatey's moderation scans the binary. The
+# package is the .nupkg the release workflow built, validated and attested
+# inside oow-<version>-package-manifests.zip; its checksum and attestation are
+# verified before anything is pushed. Needs the repository secret
+# CHOCOLATEY_API_KEY (an API key from community.chocolatey.org).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Stable release tag to publish, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: download and verify the package
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Chocolatey takes stable versions only (packaging/README.md).
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+)$') { throw "'$env:TAG' is not a stable release tag like v1.2.3" }
+          $version = $Matches[1]
+          $zip = "oow-$version-package-manifests.zip"
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --pattern $zip --pattern SHA256SUMS --dir rel
+          if ($LASTEXITCODE -ne 0) { throw "could not download $zip and SHA256SUMS from $env:TAG" }
+          $line = Get-Content rel/SHA256SUMS | Where-Object { $_ -match "\s\*?$([regex]::Escape($zip))$" }
+          if (-not $line) { throw "SHA256SUMS has no entry for $zip" }
+          $want = ($line -split '\s+')[0].ToLowerInvariant()
+          $got = (Get-FileHash -LiteralPath "rel/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($got -ne $want) { throw "$zip has SHA-256 $got, SHA256SUMS says $want" }
+          gh attestation verify "rel/$zip" --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw "the attestation of $zip did not verify" }
+          Expand-Archive -LiteralPath "rel/$zip" -DestinationPath packages
+          $nupkg = Join-Path (Resolve-Path packages) "chocolatey/oow.$version.nupkg"
+          if (-not (Test-Path -LiteralPath $nupkg)) { throw "$zip has no chocolatey/oow.$version.nupkg" }
+          "NUPKG=$nupkg" >> $env:GITHUB_ENV
+          Write-Host "Verified ${zip}: checksum and attestation."
+
+      - name: push to the Chocolatey community repository
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:CHOCOLATEY_API_KEY) {
+            throw 'the CHOCOLATEY_API_KEY secret is not set: add it under Settings > Secrets and variables > Actions'
+          }
+          choco push $env:NUPKG --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          if ($LASTEXITCODE -ne 0) { throw "choco push exited $LASTEXITCODE" }
+          "Pushed ``$(Split-Path -Leaf $env:NUPKG)``. Chocolatey now validates, verifies and moderates it: https://community.chocolatey.org/packages/oow" >> $env:GITHUB_STEP_SUMMARY

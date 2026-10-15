@@ -177,7 +177,10 @@ arrives.
   product's module graph: `go-winres` (pinned tool) and `wingetcheck` (winget schema checks).
 - `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,
   PowerShell script parsing, resource and package checks), `codeql.yml`, `release.yml`
-  (tag-driven builds, `SHA256SUMS`, attestations, GitHub release; manual runs are dry runs).
+  (tag-driven builds, `SHA256SUMS`, attestations, GitHub release; manual runs are dry runs),
+  `defender-check.yml` (daily read-only Defender scan of the latest release),
+  `publish-chocolatey.yml` (manual push of a verified release package; secret
+  `CHOCOLATEY_API_KEY`), `screenshots.yml` (README captures in the sandbox).
 
 ## Commands
 
