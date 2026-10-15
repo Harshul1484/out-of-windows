@@ -54,8 +54,13 @@ can copy it into another program, so it is not proof; the checksum and attestati
   detection through.
 - Report the file yourself at <https://www.microsoft.com/en-us/wdsi/filesubmission> (choose
   "Home customer" and "Incorrectly detected as malware/malicious"); more reports help.
-- Once Microsoft updates its definitions, run `Update-MpSignature` (or Windows Update) and
-  install again.
+- Once Microsoft updates its definitions, clear Defender's cached cloud verdicts and update, as
+  Microsoft asks after fixing a false positive, then install again (elevated):
+
+  ```powershell
+  & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -RemoveDefinitions -DynamicSignatures
+  & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -SignatureUpdate
+  ```
 - If you cannot wait, that is your decision to make. Keep any exception to the one file you
   verified, and remove it once the definitions are fixed:
   `Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\Programs\oow\oow.exe"` (elevated), later
@@ -100,11 +105,29 @@ each new build can be flagged again.
    & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File <path> -DisableRemediation
    ```
 
-   Without downloading anything to your own machine: run the **Defender check** workflow
-   (Actions → Defender check → Run workflow, with the tag, e.g. `v0.1.0`). It updates Defender
-   on a fresh GitHub-hosted VM, scans every file of that release without quarantining it, and
-   lists the result in the run's summary. A clean result there is a good sign, not proof: the
-   machine-learning and cloud settings of a server runner can differ from a home PC.
+   Without downloading anything to your own machine: the **Defender check** workflow does
+   this every day for the latest release, and on demand (Actions → Defender check → Run
+   workflow, optionally with a tag such as `v0.1.0`). On a fresh GitHub-hosted VM it drops
+   cached cloud verdicts, updates Defender and scans every file of the release without
+   quarantining it, once with the definitions alone and once with cloud protection. The
+   run's summary shows both, so a fix that has reached one but not the other is visible; the
+   cloud-protected result decides the run. A clean result there is a good sign, not proof:
+   the machine-learning and cloud settings of a server runner can differ from a home PC.
+
+7. **If the analyst keeps the detection**, press **Rescan submission** on the submission's
+   page (newer definitions sometimes clear it), then **File a dispute** there. The developer
+   dispute form asks for a company name and website (the project and its repository are
+   fine), the application, version and a description (up to 1,900 characters), the download
+   URL, the Microsoft product that detected it, the scan results, the definition version, and
+   why it should not be detected. Give evidence an analyst can check: the source, the release
+   workflow and attestation, the SHA-256, what the protected-path lists are for, the network
+   access, and any build of the same source that is not detected. For v0.1.0 the first
+   analysis kept the detection; the dispute was answered within a day as a false positive,
+   naming the definition version that carries the fix. Microsoft's reply comes by email; the
+   dispute does not appear in the submission history.
+
+8. The fix can take time to reach Defender after Microsoft's reply. Wait for the Defender
+   check to pass before closing the issue or publishing to winget or Chocolatey.
 
 Package repositories scan submissions (winget-pkgs runs Defender, Chocolatey runs
 VirusTotal), so resolve a detection before publishing a release there; see
