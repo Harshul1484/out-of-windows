@@ -39,8 +39,12 @@ jobs:
           } catch { Write-Host "::warning::could not turn on cloud protection: $_" }
           # The runner's default update source can report "no updates needed"
           # for days-old intelligence, so fetch straight from Microsoft's
-          # malware protection center first.
+          # malware protection center first. Cached cloud verdicts (dynamic
+          # signatures) are dropped before, as Microsoft asks after fixing a
+          # false positive.
           $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          & $mpcmd -RemoveDefinitions -DynamicSignatures | Out-Host
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::MpCmdRun -RemoveDefinitions -DynamicSignatures exited $LASTEXITCODE" }
           & $mpcmd -SignatureUpdate -MMPC | Out-Host
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::MpCmdRun -SignatureUpdate -MMPC exited $LASTEXITCODE; trying Microsoft Update"
@@ -89,29 +93,46 @@ jobs:
           TAG: ${{ env.RELEASE_TAG }}
         run: |
           $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          function Invoke-Scan($path, $label) {
+            $out = & $mpcmd -Scan -ScanType 3 -File $path -DisableRemediation 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host "== $(Split-Path -Leaf $path), $label (exit $code)`n$out"
+            switch ($code) { 0 { 'clean' } 2 { '**detected**' } default { "scan failed (exit $code)" } }
+          }
+          $names = @(Get-Content assets.txt)
+          $dir = Resolve-Path rel
+          # Definitions alone first, with cloud lookups off: after Microsoft
+          # fixes a false positive, this shows whether the fix has reached the
+          # security intelligence while the cloud verdict still lags. It runs
+          # before any cloud lookup, so no cloud verdict is cached yet.
+          $local = @{}
+          try {
+            Set-MpPreference -MAPSReporting Disabled
+            foreach ($name in $names) {
+              $path = Join-Path $dir $name
+              if (Test-Path -LiteralPath $path) { $local[$name] = Invoke-Scan $path 'definitions only' }
+            }
+          } finally { Set-MpPreference -MAPSReporting Advanced }
+          # With cloud protection, as on a home PC: this result decides the run.
           $rows = @()
           $flagged = 0
-          foreach ($name in Get-Content assets.txt) {
-            $path = Join-Path (Resolve-Path rel) $name
+          foreach ($name in $names) {
+            $path = Join-Path $dir $name
             if (-not (Test-Path -LiteralPath $path)) {
-              $rows += "| $name | removed on download (detected by real-time protection) |"
+              $rows += "| $name | removed on download (detected by real-time protection) | |"
               $flagged++
               continue
             }
-            $out = & $mpcmd -Scan -ScanType 3 -File $path -DisableRemediation 2>&1 | Out-String
-            Write-Host "== $name (exit $LASTEXITCODE)`n$out"
-            switch ($LASTEXITCODE) {
-              0 { $rows += "| $name | clean |" }
-              2 { $rows += "| $name | **detected** |"; $flagged++ }
-              default { $rows += "| $name | scan failed (exit $LASTEXITCODE) |"; $flagged++ }
-            }
+            $result = Invoke-Scan $path 'with cloud protection'
+            if ($result -ne 'clean') { $flagged++ }
+            $rows += "| $name | $result | $($local[$name]) |"
           }
           $threats = Get-MpThreatDetection -ErrorAction SilentlyContinue | ForEach-Object {
             $t = Get-MpThreat -ThreatID $_.ThreatID -ErrorAction SilentlyContinue
             "| $($t.ThreatName) | $($_.Resources -join ', ') |"
           }
           "`n## Scan of $env:TAG`n" >> $env:GITHUB_STEP_SUMMARY
-          "| File | Result |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          "| File | With cloud protection | Definitions only |`n|---|---|---|" >> $env:GITHUB_STEP_SUMMARY
           $rows >> $env:GITHUB_STEP_SUMMARY
           if ($threats) {
             "`n| Detection | Resources |`n|---|---|" >> $env:GITHUB_STEP_SUMMARY
