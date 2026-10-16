@@ -124,7 +124,9 @@ each new build can be flagged again.
    access, and any build of the same source that is not detected. For v0.1.0 the first
    analysis kept the detection; the dispute was answered within a day as a false positive,
    naming the definition version that carries the fix. Microsoft's reply comes by email; the
-   dispute does not appear in the submission history.
+   dispute does not appear in the submission history. Replies to those emails bounce (the
+   reply address accepts only Microsoft senders): to follow up, file another dispute on the
+   same submission.
 
 8. The fix can take time to reach Defender after Microsoft's reply. Wait for the Defender
    check to pass before closing the issue or publishing to winget or Chocolatey.
