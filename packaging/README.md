@@ -15,7 +15,7 @@ The name is final (`oow`, [#11](https://github.com/Harshul1484/out-of-windows/is
 |---|---|
 | winget | `Harshul1484.oow`, publisher `Harshul1484`, moniker `oow` |
 | Scoop | `oow` (the manifest's file name, `oow.json`) |
-| Chocolatey | `oow` |
+| Chocolatey | `oow`, maintained by the author as [H1000](https://community.chocolatey.org/profiles/H1000) |
 
 ## Placeholders
 
