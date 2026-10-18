@@ -6,6 +6,11 @@ is a false positive, tracked in
 [#18](https://github.com/Harshul1484/out-of-windows/issues/18); this page explains why it
 happens, how to check a download, and what the maintainer does about it.
 
+**v0.1.0:** Microsoft confirmed the detection as a false positive, and security intelligence
+1.461.71.0 and later no longer detect any v0.1.0 file (Defender check on 2026-10-18 with
+1.461.86.0, with and without cloud protection). Each new build is a new file and can be
+flagged again, so every release goes through the same check.
+
 ## Why it happens
 
 `oow` deletes files, so it carries explicit lists of what it must never touch: browser
@@ -128,8 +133,11 @@ each new build can be flagged again.
    reply address accepts only Microsoft senders): to follow up, file another dispute on the
    same submission.
 
-8. The fix can take time to reach Defender after Microsoft's reply. Wait for the Defender
-   check to pass before closing the issue or publishing to winget or Chocolatey.
+8. The fix can take time to reach Defender after Microsoft's reply, and it can miss. For
+   v0.1.0 the first announced fix (1.461.29.0) changed nothing because a different signature
+   produced the detection; a second dispute citing the Defender check's log got that
+   signature disabled (1.461.71.0). Wait for the Defender check to pass before closing the
+   issue or publishing to winget or Chocolatey.
 
 Package repositories scan submissions (winget-pkgs runs Defender, Chocolatey runs
 VirusTotal), so resolve a detection before publishing a release there; see

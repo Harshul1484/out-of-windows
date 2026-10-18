@@ -2,11 +2,10 @@
 
 > **Status ([#13](https://github.com/Harshul1484/out-of-windows/issues/13)):** Scoop is
 > published in [Harshul1484/scoop-bucket](https://github.com/Harshul1484/scoop-bucket) since
-> v0.1.0 and follows new releases on its own. winget and Chocolatey wait until release binaries
-> are no longer flagged by Microsoft Defender
-> ([#18](https://github.com/Harshul1484/out-of-windows/issues/18)) or are signed
-> ([#15](https://github.com/Harshul1484/out-of-windows/issues/15)), because both scan
-> submissions.
+> v0.1.0 and follows new releases on its own. winget and Chocolatey are being submitted for
+> v0.1.0, now that Microsoft Defender no longer flags it
+> ([#18](https://github.com/Harshul1484/out-of-windows/issues/18)); both scan submissions, so
+> each later release waits for its Defender check to pass.
 
 ## Package identities
 

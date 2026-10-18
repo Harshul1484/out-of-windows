@@ -240,12 +240,12 @@ Copies installed with winget, Scoop or Chocolatey are updated and removed with t
 manager; `oow update` and `oow remove` tell you the exact command.
 
 > [!NOTE]
-> **Antivirus false positive.** Microsoft Defender currently flags the x64 `oow.exe` as
-> `Trojan:Win32/LummaStealer.DO!MTB`. `oow` contains the names of browser credential files,
-> wallets and key stores so that it can *refuse* to touch them, which machine-learning detection
-> mistakes for an information stealer. Check the SHA-256 and the attestation above; do not turn
-> Defender off. Details and progress: [docs/DEFENDER.md](docs/DEFENDER.md),
-> [#18](https://github.com/Harshul1484/out-of-windows/issues/18).
+> **Antivirus false positive (fixed).** Microsoft Defender flagged the x64 `oow.exe` of v0.1.0
+> as `Trojan:Win32/LummaStealer.DO!MTB`: `oow` contains the names of browser credential files,
+> wallets and key stores so that it can *refuse* to touch them. Microsoft confirmed it as a false
+> positive, and security intelligence 1.461.71.0 and later no longer detect it. If Defender
+> still removes `oow.exe`, update its definitions and install again; do not turn Defender off.
+> The latest release is scanned with Defender every day; see [docs/DEFENDER.md](docs/DEFENDER.md).
 
 **From source** (Go 1.26+):
 
@@ -367,9 +367,8 @@ which and why. It is not a "PC optimizer", a registry editor or a background ser
 
 **Available now (v0.1.0):** everything above.
 
-**Planned:** winget and Chocolatey packages ([#13](https://github.com/Harshul1484/out-of-windows/issues/13)),
-code-signed releases ([#15](https://github.com/Harshul1484/out-of-windows/issues/15)) and
-clearing the Defender detection ([#18](https://github.com/Harshul1484/out-of-windows/issues/18)).
+**Planned:** winget and Chocolatey packages ([#13](https://github.com/Harshul1484/out-of-windows/issues/13))
+and code-signed releases ([#15](https://github.com/Harshul1484/out-of-windows/issues/15)).
 Progress is on the [project board](https://github.com/users/Harshul1484/projects/6).
 
 ## Contributing
@@ -384,7 +383,7 @@ go run ./cmd/oow --sandbox .sandbox\demo clean   # try any command against it
 `gofmt`, `go vet ./...` and `go test ./...` must pass. Tests create files only under the
 git-ignored `.sandbox/`, behind a deletion fence, and CI runs everything on disposable Windows
 VMs, including a real cleanup guarded by canary files. Defender may quarantine some test
-binaries locally (#18); CI runs the full suite. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+binaries locally ([docs/DEFENDER.md](docs/DEFENDER.md)); CI runs the full suite. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
 project contract in [AGENTS.md](AGENTS.md); report vulnerabilities privately as described in
 [SECURITY.md](SECURITY.md).
 
