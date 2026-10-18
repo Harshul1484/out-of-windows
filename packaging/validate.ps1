@@ -171,6 +171,12 @@ if ($nuspec) {
     foreach ($k in 'title', 'authors', 'description', 'summary', 'projectUrl', 'licenseUrl', 'packageSourceUrl') {
         Expect (-not [string]::IsNullOrWhiteSpace([string](Get-Prop $meta $k))) "chocolatey: $k is missing"
     }
+    # Chocolatey's validator guidelines: an icon, release notes, and a source URL that is the
+    # code of this version rather than a copy of projectUrl. All are pinned to the release tag.
+    $repoUrl = "https://github.com/Harshul1484/out-of-windows"
+    Expect ((Get-Prop $meta 'releaseNotes') -ceq "$repoUrl/releases/tag/v$Version") "chocolatey: releaseNotes does not point at v$Version"
+    Expect ((Get-Prop $meta 'projectSourceUrl') -ceq "$repoUrl/tree/v$Version") "chocolatey: projectSourceUrl does not point at the v$Version source"
+    Expect ((Get-Prop $meta 'iconUrl') -ceq "https://cdn.jsdelivr.net/gh/Harshul1484/out-of-windows@v$Version/assets/brand/icons/oow-icon-256.png") "chocolatey: iconUrl is not the v$Version icon"
 }
 if (-not (Test-Path -LiteralPath $installFile)) {
     $failures.Add("chocolatey: $installFile is missing")

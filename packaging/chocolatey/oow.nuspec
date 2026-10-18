@@ -7,14 +7,16 @@
     <title>out-of-windows (oow)</title>
     <authors>Harshul Rathod</authors>
     <projectUrl>https://github.com/Harshul1484/out-of-windows</projectUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/Harshul1484/out-of-windows@v<VERSION>/assets/brand/icons/oow-icon-256.png</iconUrl>
     <licenseUrl>https://github.com/Harshul1484/out-of-windows/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    <projectSourceUrl>https://github.com/Harshul1484/out-of-windows</projectSourceUrl>
+    <projectSourceUrl>https://github.com/Harshul1484/out-of-windows/tree/v<VERSION></projectSourceUrl>
     <packageSourceUrl>https://github.com/Harshul1484/out-of-windows/tree/main/packaging/chocolatey</packageSourceUrl>
     <bugTrackerUrl>https://github.com/Harshul1484/out-of-windows/issues</bugTrackerUrl>
     <tags>cleanup disk uninstaller maintenance cli</tags>
     <summary>Windows-native system maintenance from the terminal.</summary>
     <description>oow cleans temporary files and caches, uninstalls apps with their own uninstallers and reviews what they leave behind, analyzes disk usage and shows live system status. Every destructive action is previewed, explained, confirmed and verified.</description>
+    <releaseNotes>https://github.com/Harshul1484/out-of-windows/releases/tag/v<VERSION></releaseNotes>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />
