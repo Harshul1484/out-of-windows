@@ -119,37 +119,6 @@ jobs:
             ./packaging/validate.ps1 -Version $v -Dist $dist -Dir $out -Repo $env:REPO
           }
 
-  npm:
-    name: npm package (pack, install, run through the launcher)
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - name: build the package from fresh builds
-        shell: pwsh
-        run: |
-          # As publish-npm.yml builds it, with executables stamped 1.2.3 in
-          # place of a release's files.
-          $v = '1.2.3'
-          $pkg = 'github.com/Harshul1484/out-of-windows/internal/buildinfo'
-          foreach ($arch in 'amd64', 'arm64') {
-            $env:GOARCH = $arch
-            go build -trimpath -ldflags "-s -w -X $pkg.Version=$v" -o "dist/$arch/oow.exe" ./cmd/oow
-            if ($LASTEXITCODE -ne 0) { throw "the $arch build failed" }
-          }
-          Remove-Item Env:GOARCH
-          ./packaging/npm/render.ps1 -Version $v -Amd64Exe dist/amd64/oow.exe -Arm64Exe dist/arm64/oow.exe -Out npm-pkg
-          Push-Location npm-pkg
-          $tgz = (npm pack --json | ConvertFrom-Json)[0].filename
-          if ($LASTEXITCODE -ne 0 -or -not $tgz) { throw 'npm pack failed' }
-          Pop-Location
-          "TARBALL=$(Join-Path (Resolve-Path npm-pkg) $tgz)" >> $env:GITHUB_ENV
-      - name: install it and run oow through the launcher
-        shell: pwsh
-        run: ./scripts/ci/npm-check.ps1 -Tarball $env:TARBALL -Version 1.2.3
-
   e2e-real:
     name: end-to-end on a real Windows Server 2025 VM
     needs: test

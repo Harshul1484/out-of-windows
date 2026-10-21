@@ -295,21 +295,6 @@ func TestUpdatePointsToThePackageManager(t *testing.T) {
 	}
 }
 
-func TestUpdatePointsToNpx(t *testing.T) {
-	e, _ := newUpdateEnv(t, "1.0.0", "v1.1.0")
-	exe := filepath.Join(e.root, `C\Users\sandbox\AppData\Local\npm-cache\_npx\0a1b2c\node_modules\out-of-windows\vendor\win32-x64\oow.exe`)
-	if err := sandbox.WriteFile(exe, 100, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(cli.SetSelfExe(exe))
-	out, _, code := e.run("update", "--yes", "--json")
-	d := decode[updateDoc](t, out)
-	if code != cli.ExitError || d.ManagedBy == nil || d.ManagedBy.Manager != "npx" ||
-		!strings.Contains(d.Error, "runs through npx") || !strings.Contains(d.Error, "npx out-of-windows@latest") {
-		t.Fatalf("code = %d, doc = %+v", code, d)
-	}
-}
-
 func TestUpdateTextOutput(t *testing.T) {
 	e, _ := newUpdateEnv(t, "1.0.0", "v1.1.0")
 	out, _, code := e.run("update", "--dry-run")

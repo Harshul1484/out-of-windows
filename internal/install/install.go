@@ -1,6 +1,6 @@
 // Package install knows how oow is installed: the folder the installer
-// script uses, whether a package manager (winget, Scoop, Chocolatey, npm)
-// owns the executable instead, and the user PATH entry the installer adds.
+// script uses, whether a package manager (winget, Scoop, Chocolatey) owns the
+// executable instead, and the user PATH entry the installer adds.
 //
 // It decides; it does not delete. Removals go through the verified sinks in
 // internal/filesystem, and PATH changes through an envpath.Store (the
@@ -47,14 +47,7 @@ const (
 	Winget     Manager = "winget"
 	Scoop      Manager = "scoop"
 	Chocolatey Manager = "chocolatey"
-	Npm        Manager = "npm"
-	// Npx is a copy npx runs from npm's cache: nothing is installed.
-	Npx Manager = "npx"
 )
-
-// NpmPackage is the npm package that ships oow (packaging/npm). Its files
-// include vendor\win32-<arch>\oow.exe, which its launcher starts.
-const NpmPackage = "out-of-windows"
 
 // Managed says which package manager owns the executable, if any.
 type Managed struct {
@@ -71,10 +64,6 @@ func (m Managed) Label() string {
 		return "Scoop"
 	case Chocolatey:
 		return "Chocolatey"
-	case Npm:
-		return "npm"
-	case Npx:
-		return "npx"
 	}
 	return ""
 }
@@ -88,16 +77,11 @@ func (m Managed) UpdateCommand() string {
 		return "scoop update " + m.pkg()
 	case Chocolatey:
 		return "choco upgrade " + m.pkg()
-	case Npm:
-		return "npm update -g " + m.pkg()
-	case Npx:
-		return "npx " + m.pkg() + "@latest"
 	}
 	return ""
 }
 
-// RemoveCommand is how the user uninstalls through the manager. It is empty
-// for npx, which installs nothing.
+// RemoveCommand is how the user uninstalls through the manager.
 func (m Managed) RemoveCommand() string {
 	switch m.Manager {
 	case Winget:
@@ -106,8 +90,6 @@ func (m Managed) RemoveCommand() string {
 		return "scoop uninstall " + m.pkg()
 	case Chocolatey:
 		return "choco uninstall " + m.pkg()
-	case Npm:
-		return "npm uninstall -g " + m.pkg()
 	}
 	return ""
 }
@@ -167,29 +149,8 @@ func DetectManager(env Env, paths ...string) Managed {
 		if strings.Contains(k, `\CHOCOLATEY\BIN\`) {
 			return Managed{Manager: Chocolatey}
 		}
-		if npmExe(n) {
-			// npx unpacks packages under npm's cache: npm-cache\_npx\<hash>\node_modules.
-			if strings.Contains(k, `\_NPX\`) {
-				return Managed{Manager: Npx, Package: NpmPackage}
-			}
-			return Managed{Manager: Npm, Package: NpmPackage}
-		}
 	}
 	return Managed{}
-}
-
-// npmExe reports whether n is exactly
-// ...\node_modules\<NpmPackage>\vendor\win32-x64|win32-arm64\<ExeName()>,
-// where the npm package keeps its executables.
-func npmExe(n string) bool {
-	arch := filepath.Dir(n)
-	vendor := filepath.Dir(arch)
-	pkg := filepath.Dir(vendor)
-	return strings.EqualFold(filepath.Base(n), ExeName()) &&
-		(strings.EqualFold(filepath.Base(arch), "win32-x64") || strings.EqualFold(filepath.Base(arch), "win32-arm64")) &&
-		strings.EqualFold(filepath.Base(vendor), "vendor") &&
-		strings.EqualFold(filepath.Base(pkg), NpmPackage) &&
-		strings.EqualFold(filepath.Base(filepath.Dir(pkg)), "node_modules")
 }
 
 // segmentAfter returns the path component that follows marker (matched

@@ -169,22 +169,18 @@ arrives.
   `docs/JSON.md` (output schemas), `docs/ROADMAP.md`.
 - `SECURITY.md`: vulnerability reporting policy. `SECURITY_AUDIT.md`: security review notes.
 - `scripts/ci/`: CI-only scripts (`e2e-real.ps1` performs a real cleanup and refuses to run
-  outside CI; `check-exe-metadata.ps1` checks the embedded version information and manifest;
-  `npm-check.ps1` installs an npm tarball globally and runs oow through its launcher).
+  outside CI; `check-exe-metadata.ps1` checks the embedded version information and manifest).
 - `scripts/install.ps1`, `scripts/install.cmd`: per-user installer (SHA-256 verified, fails
   closed, no admin). `packaging/`: winget (`Harshul1484.oow`), Scoop and Chocolatey (`oow`)
-  templates, `render.ps1` and `validate.ps1`; `packaging/npm/`: the npm package
-  `out-of-windows` (template, launcher `bin/oow.js`, `render.ps1` with both executables).
+  templates, `render.ps1` and `validate.ps1`; not published before the first release.
 - `tools/`: a separate Go module for build and CI tools, so their dependencies stay out of the
   product's module graph: `go-winres` (pinned tool) and `wingetcheck` (winget schema checks).
 - `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,
-  PowerShell script parsing, resource and package checks, npm package install), `codeql.yml`, `release.yml`
+  PowerShell script parsing, resource and package checks), `codeql.yml`, `release.yml`
   (tag-driven builds, `SHA256SUMS`, attestations, GitHub release; manual runs are dry runs),
   `defender-check.yml` (daily read-only Defender scan of the latest release),
   `publish-chocolatey.yml` (manual push of a verified release package; secret
-  `CHOCOLATEY_API_KEY`), `publish-npm.yml` (manual npm publish of the verified release
-  executables with provenance; `NPM_TOKEN` for the first publish, then trusted publishing),
-  `screenshots.yml` (README captures in the sandbox).
+  `CHOCOLATEY_API_KEY`), `screenshots.yml` (README captures in the sandbox).
 
 ## Commands
 
