@@ -215,6 +215,7 @@ and 2025 (x64); ARM64 builds are published but not tested in CI.
 | PowerShell | `irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/install.ps1 \| iex` |
 | Command Prompt | run [`scripts/install.cmd`](scripts/install.cmd) |
 | Scoop | `scoop bucket add oow https://github.com/Harshul1484/scoop-bucket` then `scoop install oow/oow` |
+| Chocolatey | `choco install oow` (from an elevated shell, as Chocolatey requires) |
 | Manual | download `oow-<version>-windows-amd64.zip` (or `arm64`) from [Releases](https://github.com/Harshul1484/out-of-windows/releases) |
 
 The installer picks the build for your CPU, checks its SHA-256 against the release's
@@ -367,7 +368,7 @@ which and why. It is not a "PC optimizer", a registry editor or a background ser
 
 **Available now (v0.1.0):** everything above.
 
-**Planned:** winget and Chocolatey packages ([#13](https://github.com/Harshul1484/out-of-windows/issues/13))
+**Planned:** the winget package ([#13](https://github.com/Harshul1484/out-of-windows/issues/13), in review)
 and code-signed releases ([#15](https://github.com/Harshul1484/out-of-windows/issues/15)).
 Progress is on the [project board](https://github.com/users/Harshul1484/projects/6).
 
