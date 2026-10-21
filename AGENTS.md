@@ -166,13 +166,15 @@ arrives.
 - `internal/sandbox/`: simulated Windows layout and seed data for safe end-to-end runs.
 - `internal/testutil/`: test sandbox, deletion fence setup, fixtures, file locking.
 - `docs/SAFETY.md`: the safety model (design contract). `docs/ARCHITECTURE.md`,
-  `docs/JSON.md` (output schemas), `docs/ROADMAP.md`.
+  `docs/JSON.md` (output schemas), `docs/ROADMAP.md`, `docs/RELEASING.md` (release checklist),
+  `docs/DEFENDER.md` (false positives and submissions).
 - `SECURITY.md`: vulnerability reporting policy. `SECURITY_AUDIT.md`: security review notes.
 - `scripts/ci/`: CI-only scripts (`e2e-real.ps1` performs a real cleanup and refuses to run
   outside CI; `check-exe-metadata.ps1` checks the embedded version information and manifest).
 - `scripts/install.ps1`, `scripts/install.cmd`: per-user installer (SHA-256 verified, fails
-  closed, no admin). `packaging/`: winget (`Harshul1484.oow`), Scoop and Chocolatey (`oow`)
-  templates, `render.ps1` and `validate.ps1`; not published before the first release.
+  closed, no admin). `scripts/demo.ps1`: a typed demo in a new sandbox, for recording the
+  README GIF. `packaging/`: winget (`Harshul1484.oow`), Scoop and Chocolatey (`oow`)
+  templates, `render.ps1` and `validate.ps1`.
 - `tools/`: a separate Go module for build and CI tools, so their dependencies stay out of the
   product's module graph: `go-winres` (pinned tool) and `wingetcheck` (winget schema checks).
 - `.github/workflows/`: `ci.yml` (Windows Server 2025/2022 tests, fuzzing, real e2e,

@@ -194,6 +194,9 @@ jobs:
           irm https://raw.githubusercontent.com/${REPO}/main/scripts/install.ps1 | iex
           \`\`\`
 
+          Scoop: \`scoop bucket add oow https://github.com/Harshul1484/scoop-bucket\` then \`scoop install oow/oow\`.
+          Chocolatey: \`choco install oow\` (elevated). Package repositories update after their own review.
+
           Or download \`oow-${VERSION}-windows-amd64.zip\` (or \`arm64\`) below. Already installed? Run \`oow update\`.
           (\`oow-${VERSION}-package-manifests.zip\` holds the winget, Scoop and Chocolatey files for package repositories; you do not need it to install.)
 
@@ -206,13 +209,13 @@ jobs:
           gh attestation verify oow-${VERSION}-windows-amd64.exe --repo ${REPO}
           \`\`\`
 
-          ## Known issue
+          ## If Microsoft Defender flags oow.exe
 
-          Microsoft Defender may flag \`oow.exe\` as malware. This is a false positive: oow lists the
-          names of browser credential files, wallets and key stores in order to protect them, which
-          resembles an information stealer to machine-learning detection. Check the SHA-256 and the
-          attestation above. Code signing and false-positive submissions to Microsoft are planned.
-          Do not turn off Defender; see https://github.com/${REPO}/blob/main/docs/DEFENDER.md.
+          oow lists the names of browser credential files, wallets and key stores in order to
+          protect them, which machine-learning detection can mistake for an information stealer;
+          v0.1.0 was flagged this way until Microsoft confirmed it as a false positive. Check the
+          SHA-256 and the attestation above and update Defender's definitions. Do not turn off
+          Defender; see https://github.com/${REPO}/blob/main/docs/DEFENDER.md.
           EOF
 
       - name: publish
