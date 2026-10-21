@@ -143,6 +143,10 @@ func runUpdate(ctx context.Context, app *App, o updateOptions) error {
 
 	// Refusals that need no network: the package manager owns this copy, or
 	// a development build cannot order itself against releases.
+	if !o.check && managed.Manager == install.Npx {
+		return done(ExitError, fmt.Sprintf("%s runs through npx; run the latest release with: %s",
+			buildinfo.Name, managed.UpdateCommand()))
+	}
 	if !o.check && managed.Manager != install.None {
 		return done(ExitError, fmt.Sprintf("%s was installed with %s; update it with: %s",
 			buildinfo.Name, managed.Label(), managed.UpdateCommand()))

@@ -275,7 +275,9 @@ largest first, filtered by `--min-size`, at most `--top` entries.
 - `dev_build`: a source build (`0.1.0-dev`) cannot order itself against releases; it never
   updates itself (exit 1) and `update_available` stays `false`.
 - `managed_by`: `null`, or `{"manager", "package", "update_command", "remove_command"}` with
-  `manager` one of `winget`, `scoop`, `chocolatey`. Such installs are not updated (exit 1);
+  `manager` one of `winget`, `scoop`, `chocolatey`, `npm`, `npx` (a copy npx runs from npm's
+  cache: `update_command` runs the latest release, `remove_command` is empty because nothing
+  is installed). Such installs are not updated (exit 1);
   `--check` still reports.
 - `release` is present once GitHub answered; `asset` and `backup` once an update was planned.
   `sha256` comes from the release's `SHA256SUMS`; a missing file, a missing entry or a

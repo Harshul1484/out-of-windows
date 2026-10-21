@@ -56,11 +56,23 @@ func TestDetectManager(t *testing.T) {
 		{`C:\ProgramData\chocolatey\lib\oow\tools\oow.exe`, nil, install.Managed{Manager: install.Chocolatey, Package: "oow"}},
 		{`E:\choco\lib\oow.portable\tools\oow.exe`, map[string]string{"ChocolateyInstall": `E:\choco`}, install.Managed{Manager: install.Chocolatey, Package: "oow.portable"}},
 		{`C:\ProgramData\chocolatey\bin\oow.exe`, nil, install.Managed{Manager: install.Chocolatey}},
+		// npm: a global install, a project install, and a copy npx runs from npm's cache.
+		{`C:\Users\a\AppData\Roaming\npm\node_modules\out-of-windows\vendor\win32-x64\oow.exe`, nil,
+			install.Managed{Manager: install.Npm, Package: "out-of-windows"}},
+		{`D:\work\app\node_modules\out-of-windows\vendor\win32-arm64\oow.exe`, nil,
+			install.Managed{Manager: install.Npm, Package: "out-of-windows"}},
+		{`C:\Users\a\AppData\Local\npm-cache\_npx\1f2e3d4c5b6a7980\node_modules\out-of-windows\vendor\win32-x64\oow.exe`, nil,
+			install.Managed{Manager: install.Npx, Package: "out-of-windows"}},
 		// Not managed: the installer's folder, a source build, and lookalikes.
 		{`C:\Users\a\AppData\Local\Programs\oow\oow.exe`, nil, install.Managed{}},
 		{`D:\Projects\out-of-windows\bin\oow.exe`, nil, install.Managed{}},
 		{`D:\Projects\scoop-apps\oow.exe`, nil, install.Managed{}},
 		{`D:\x\apps\oow\oow.exe`, map[string]string{"SCOOP": ``}, install.Managed{}},
+		{`D:\x\node_modules\another-tool\vendor\win32-x64\oow.exe`, nil, install.Managed{}},
+		{`D:\x\node_modules\out-of-windows\bin\oow.exe`, nil, install.Managed{}},
+		{`D:\x\node_modules\out-of-windows\vendor\win32-ia32\oow.exe`, nil, install.Managed{}},
+		{`D:\x\node_modules\out-of-windows\vendor\win32-x64\other.exe`, nil, install.Managed{}},
+		{`D:\x\out-of-windows\vendor\win32-x64\oow.exe`, nil, install.Managed{}},
 	}
 	for _, c := range cases {
 		if got := install.DetectManager(env(c.vars), c.path); got != c.want {
@@ -74,6 +86,15 @@ func TestDetectManager(t *testing.T) {
 	}
 	if m := (install.Managed{Manager: install.Scoop}); m.UpdateCommand() != "scoop update oow" {
 		t.Errorf("default package name: %s", m.UpdateCommand())
+	}
+	npm := install.Managed{Manager: install.Npm, Package: install.NpmPackage}
+	if npm.UpdateCommand() != "npm update -g out-of-windows" || npm.RemoveCommand() != "npm uninstall -g out-of-windows" {
+		t.Errorf("npm commands: %q, %q", npm.UpdateCommand(), npm.RemoveCommand())
+	}
+	// npx installs nothing: there is a newer run, not an uninstall.
+	npx := install.Managed{Manager: install.Npx, Package: install.NpmPackage}
+	if npx.UpdateCommand() != "npx out-of-windows@latest" || npx.RemoveCommand() != "" {
+		t.Errorf("npx commands: %q, %q", npx.UpdateCommand(), npx.RemoveCommand())
 	}
 }
 

@@ -143,6 +143,10 @@ func runRemove(ctx context.Context, app *App, o removeOptions) error {
 	}
 	if m := managedBy(self); m.Manager != install.None {
 		doc.ManagedBy = managedDoc(m)
+		if m.RemoveCommand() == "" {
+			return done(ExitError, fmt.Sprintf("%s runs from %s's cache, so nothing is installed to remove (your settings in %s and history in %s are left for you to keep or delete)",
+				buildinfo.Name, m.Label(), app.Dirs.Config, app.Dirs.Data))
+		}
 		return done(ExitError, fmt.Sprintf("%s was installed with %s; remove it with: %s (your settings in %s and history in %s are left for you to keep or delete)",
 			buildinfo.Name, m.Label(), m.RemoveCommand(), app.Dirs.Config, app.Dirs.Data))
 	}

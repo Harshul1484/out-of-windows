@@ -192,6 +192,34 @@ func TestRemovePointsToThePackageManager(t *testing.T) {
 	}
 }
 
+func TestRemoveNpmAndNpxCopies(t *testing.T) {
+	cases := []struct {
+		path, manager, want string
+	}{
+		{`C\Users\sandbox\AppData\Roaming\npm\node_modules\out-of-windows\vendor\win32-x64\oow.exe`, "npm", "npm uninstall -g out-of-windows"},
+		// npx installs nothing, so there is no uninstall command to give.
+		{`C\Users\sandbox\AppData\Local\npm-cache\_npx\0a1b2c\node_modules\out-of-windows\vendor\win32-x64\oow.exe`, "npx", "nothing is installed to remove"},
+	}
+	for _, c := range cases {
+		e := newRemoveEnv(t)
+		exe := filepath.Join(e.root, c.path)
+		if err := sandbox.WriteFile(exe, 100, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		restore := cli.SetSelfExe(exe)
+		before := testutil.SnapshotDir(t, filepath.Join(e.root, "C"))
+		out, _, code := e.run("remove", "--yes", "--json")
+		restore()
+		d := decode[removeDoc](t, out)
+		if code != cli.ExitError || d.ManagedBy == nil || d.ManagedBy.Manager != c.manager || !strings.Contains(d.Error, c.want) || d.Executed {
+			t.Errorf("%s: code = %d, doc = %+v", c.manager, code, d)
+		}
+		if len(testutil.SnapshotDir(t, filepath.Join(e.root, "C"))) != len(before) || !strings.Contains(e.userPath(), `\Programs\oow`) {
+			t.Errorf("%s: files or PATH changed for a package-manager copy", c.manager)
+		}
+	}
+}
+
 // A copy outside the installer's folder (a source build) is never deleted,
 // and the PATH entry of the real installed copy stays.
 func TestRemoveKeepsCopiesOutsideTheInstallFolder(t *testing.T) {
