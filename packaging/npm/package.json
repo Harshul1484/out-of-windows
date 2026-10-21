@@ -1,0 +1,40 @@
+{
+  "name": "out-of-windows",
+  "version": "<VERSION>",
+  "description": "Windows-native system maintenance from the terminal: cleanup, complete uninstall, disk analysis and live status.",
+  "keywords": [
+    "windows",
+    "cleanup",
+    "disk",
+    "uninstaller",
+    "maintenance",
+    "cli"
+  ],
+  "homepage": "https://github.com/Harshul1484/out-of-windows#readme",
+  "bugs": "https://github.com/Harshul1484/out-of-windows/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Harshul1484/out-of-windows.git"
+  },
+  "license": "MIT",
+  "author": "Harshul Rathod",
+  "bin": {
+    "oow": "bin/oow.js"
+  },
+  "files": [
+    "bin/",
+    "vendor/",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

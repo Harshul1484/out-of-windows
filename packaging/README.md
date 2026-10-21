@@ -17,6 +17,7 @@ The name is final (`oow`, [#11](https://github.com/Harshul1484/out-of-windows/is
 | winget | `Harshul1484.oow`, publisher `Harshul1484`, moniker `oow` |
 | Scoop | `oow` (the manifest's file name, `oow.json`) |
 | Chocolatey | `oow`, maintained by the author as [H1000](https://community.chocolatey.org/profiles/H1000) |
+| npm | `out-of-windows`, command `oow` (the name `oow` is taken on npm) |
 
 ## Placeholders
 
@@ -160,9 +161,30 @@ choco push "packages\chocolatey\oow.$v.nupkg" --source https://push.chocolatey.o
 The package then goes through Chocolatey's automated validation and verification and, for new
 packages, human moderation; follow up on the package page. Users run `choco install oow`.
 
-**5. Afterwards**: add the three install commands to the [README](../README.md#install), drop
-the "Not published" note above, tick the boxes in
-[#13](https://github.com/Harshul1484/out-of-windows/issues/13), and check that
+**5. npm** ([#24](https://github.com/Harshul1484/out-of-windows/issues/24); every version is a
+new publish). [`npm/render.ps1`](npm/render.ps1) builds the package from
+[`npm/package.json`](npm/package.json), the launcher [`npm/bin/oow.js`](npm/bin/oow.js) and both
+release executables; CI's `npm` job builds it from fresh builds, installs it and runs `oow`
+through the launcher on every push.
+
+1. Once, create an account at <https://www.npmjs.com> with two-factor authentication. For the
+   first publish, create an access token that can publish packages and store it as the
+   repository secret `NPM_TOKEN`.
+2. For each stable release, after the Defender check passes for it: Actions > **Publish npm** >
+   Run workflow, with the tag. It downloads both executables, checks them against
+   `SHA256SUMS` and their attestations, packs the package, installs that tarball and runs
+   [`scripts/ci/npm-check.ps1`](../scripts/ci/npm-check.ps1) on it, then runs
+   `npm publish --provenance`.
+3. After the first publish, on npmjs.com open the package's Settings > Trusted Publisher, add
+   GitHub Actions with repository `Harshul1484/out-of-windows` and workflow
+   `publish-npm.yml`, then delete the `NPM_TOKEN` secret (and the token on npmjs.com). Later
+   publishes authenticate through GitHub's OIDC token.
+
+Users run `npm install -g out-of-windows`, or `npx out-of-windows` without installing.
+
+**6. Afterwards**: add the install commands to the [README](../README.md#install), tick the
+boxes in [#13](https://github.com/Harshul1484/out-of-windows/issues/13) or
+[#24](https://github.com/Harshul1484/out-of-windows/issues/24), and check that
 `oow update --check` on a package-managed copy names the right package-manager command.
 
 ## Files
@@ -172,10 +194,13 @@ the "Not published" note above, tick the boxes in
 | winget | `winget/oow.yaml`, `oow.installer.yaml`, `oow.locale.en-US.yaml` (manifest 1.10.0, zip with a portable `oow.exe`) | `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Harshul1484.oow_*` |
 | Scoop | `scoop/oow.json` (with `checkver` and `autoupdate` from `SHA256SUMS`) | `~\scoop\apps\oow\` |
 | Chocolatey | `chocolatey/oow.nuspec`, `chocolatey/tools/chocolateyinstall.ps1` (amd64 zip; ARM64 Windows runs it emulated) | `C:\ProgramData\chocolatey\lib\oow\tools\` |
+| npm | `npm/package.json`, `npm/bin/oow.js`, `npm/README.md`, rendered with both executables under `vendor\win32-x64\` and `vendor\win32-arm64\` (no install scripts) | `%APPDATA%\npm\node_modules\out-of-windows\` (global) |
 
 `oow update` and `oow remove` recognize these locations and tell the user to use the package
-manager instead (`winget upgrade`, `scoop update`, `choco upgrade`, and the matching uninstall
-commands), so a package-managed copy is never replaced or deleted behind the manager's back.
+manager instead (`winget upgrade`, `scoop update`, `choco upgrade`, `npm update -g`, and the
+matching uninstall commands), so a package-managed copy is never replaced or deleted behind the
+manager's back. A copy npx runs from npm's cache installs nothing: `update` names
+`npx out-of-windows@latest` and `remove` explains there is nothing to remove.
 
 ## Known issue: antivirus false positives
 
