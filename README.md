@@ -25,10 +25,10 @@ irm https://raw.githubusercontent.com/Harshul1484/out-of-windows/main/scripts/in
 ```
 
 <p align="center">
-  <img src="docs/screenshots/clean-preview.png" alt="oow clean --dry-run: every cleanup target with its size, what was kept and why, and the totals" width="820">
+  <img src="docs/screenshots/demo.gif" alt="oow in a terminal: clean --dry-run lists every cleanup target with its size and what was kept and why; clean --yes removes them and reports what was reclaimed; an uninstall plan; the status dashboard" width="820">
 </p>
 
-<p align="center"><sub>Every screenshot in this README is the real CLI, captured in <code>oow</code>'s sandbox (a simulated Windows layout), so paths and sizes are sample data.</sub></p>
+<p align="center"><sub>The demo and every screenshot in this README are the real CLI, captured in <code>oow</code>'s sandbox (a simulated Windows layout), so paths and sizes are sample data. In the demo, only the typing is staged.</sub></p>
 
 ---
 
