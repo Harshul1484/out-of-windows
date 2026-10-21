@@ -48,8 +48,14 @@ jobs:
           & $mpcmd -SignatureUpdate -MMPC | Out-Host
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::MpCmdRun -SignatureUpdate -MMPC exited $LASTEXITCODE; trying Microsoft Update"
-            Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Continue
+            # It can report "completed with errors" after installing current
+            # intelligence, so its error is a warning; the age test below
+            # decides whether the intelligence is current.
+            try { Update-MpSignature -UpdateSource MicrosoftUpdateServer -ErrorAction Stop }
+            catch { Write-Host "::warning::Update-MpSignature: $($_.Exception.Message)" }
           }
+          # Neither update source's exit code fails the step.
+          $global:LASTEXITCODE = 0
           $s = Get-MpComputerStatus
           if ($s.AntivirusSignatureLastUpdated -lt (Get-Date).AddDays(-1)) {
             $msg = "security intelligence is from $($s.AntivirusSignatureLastUpdated), more than a day old: a clean result may not reflect current detections"
