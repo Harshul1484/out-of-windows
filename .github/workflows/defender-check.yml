@@ -46,8 +46,11 @@ jobs:
           & $mpcmd -RemoveDefinitions -DynamicSignatures | Out-Host
           if ($LASTEXITCODE -ne 0) { Write-Host "::warning::MpCmdRun -RemoveDefinitions -DynamicSignatures exited $LASTEXITCODE" }
           & $mpcmd -SignatureUpdate -MMPC | Out-Host
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::MpCmdRun -SignatureUpdate -MMPC exited $LASTEXITCODE; trying Microsoft Update"
+          $mmpc = $LASTEXITCODE
+          $published = (Get-MpComputerStatus).AntivirusSignatureLastUpdated
+          # MMPC can also succeed while serving day-old intelligence.
+          if ($mmpc -ne 0 -or $published -lt (Get-Date).AddDays(-1)) {
+            Write-Host "::warning::MpCmdRun -SignatureUpdate -MMPC exited $mmpc with intelligence from $published; trying Microsoft Update"
             # It can report "completed with errors" after installing current
             # intelligence, so its error is a warning; the age test below
             # decides whether the intelligence is current.
