@@ -3,9 +3,10 @@ name: Screenshots
 # Captures the README screenshots from the real CLI on a disposable runner,
 # inside oow's sandbox (a simulated Windows layout; nothing outside it is
 # changed). Each command's coloured output is converted to a terminal-window
-# page by tools/termshot and rendered to PNG with headless Chrome. The PNGs
-# (and the raw captures) are uploaded as an artifact to copy into
-# docs/screenshots/. Manual runs only.
+# page by tools/termshot and rendered to PNG with headless Chrome. The same
+# captures become demo.gif: each command typed at a prompt, then its real
+# output. The PNGs, the GIF and the raw captures are uploaded as an artifact to
+# copy into docs/screenshots/. Manual runs only.
 on:
   workflow_dispatch:
 
@@ -90,6 +91,44 @@ jobs:
             if (-not (Test-Path -LiteralPath $png)) { throw "no screenshot for $($p.Name)" }
             Write-Host "$($p.Name).png  ${w}x${h} css px"
           }
+
+      - name: render the demo GIF
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chrome = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+          $scene = @(
+            @{ cmd = 'oow clean --dry-run';                       in = 'shots/clean-preview.ans' },
+            @{ cmd = 'oow clean --yes';                           in = 'shots/clean-complete.ans' },
+            @{ cmd = 'oow uninstall "Contoso Studio" --dry-run';  in = 'shots/uninstall-plan.ans' },
+            @{ cmd = 'oow status';                                in = 'shots/status.ans' }
+          )
+          ConvertTo-Json @($scene) | Set-Content shots/scene.json -Encoding utf8NoBOM
+          $frames = Join-Path $PWD 'shots/frames'
+          $size = & bin/termshot.exe -scene shots/scene.json -frames $frames -title 'oow' -replace 'D:\sandbox\C\=C:\'
+          if ($LASTEXITCODE -ne 0) { throw 'termshot failed for the demo' }
+          $w, $h = $size.Trim() -split 'x'
+          foreach ($f in Get-ChildItem -LiteralPath $frames -Filter *.html) {
+            $png = [IO.Path]::ChangeExtension($f.FullName, '.png')
+            Start-Process -FilePath $chrome -Wait -NoNewWindow -ArgumentList @(
+              '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1',
+              "--window-size=$w,$h", "--screenshot=$png", "file:///$($f.FullName -replace '\\','/')")
+            if (-not (Test-Path -LiteralPath $png)) { throw "no frame for $($f.Name)" }
+          }
+          choco install ffmpeg -y --no-progress | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'could not install ffmpeg' }
+          $ffmpeg = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe'
+          # One palette for all frames, no dithering (flat terminal colours),
+          # and only the changed rectangle stored per frame.
+          Push-Location $frames
+          & $ffmpeg -hide_banner -loglevel error -y -f concat -safe 0 -i frames.txt `
+            -lavfi 'split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle' `
+            -fps_mode vfr -loop 0 ../demo.gif
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "ffmpeg exited $code" }
+          $gif = Get-Item shots/demo.gif
+          Write-Host ("demo.gif  {0}x{1} px, {2:N0} KB" -f $w, $h, ($gif.Length / 1KB))
 
       - uses: actions/upload-artifact@v7
         if: always()

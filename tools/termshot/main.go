@@ -12,13 +12,27 @@
 //
 // It prints the window size in CSS pixels ("WIDTHxHEIGHT") for the
 // screenshot.
+//
+// With -scene it writes the frames of the README's demo animation instead:
+//
+//	termshot -scene scene.json -frames DIR -title oow -replace 'D:\sb\C\=C:\'
+//
+// scene.json lists steps, [{"cmd": "oow clean --dry-run", "in": "clean.ans"}].
+// Each step starts on a clear screen, types its command after a prompt, then
+// shows the captured output a few lines at a time, scrolling like a terminal
+// once it fills the window. The output is the real capture; only the typing
+// is staged. DIR receives one HTML page per frame (f0001.html, ...) and
+// frames.txt, an ffconcat list of the PNGs rendered from them with each
+// frame's duration, for ffmpeg. All frames share one size, which is printed.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"html"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -44,27 +58,27 @@ func main() {
 	out := flag.String("out", "", "HTML file to write")
 	title := flag.String("title", "", "window title, e.g. the command line")
 	cols := flag.Int("cols", 80, "terminal width in columns")
+	scene := flag.String("scene", "", "animation steps (JSON); writes frames instead of one page")
+	frames := flag.String("frames", "", "folder for the animation's frames (with -scene)")
 	var reps replaces
 	flag.Var(&reps, "replace", "literal OLD=NEW substitution (repeatable)")
 	flag.Parse()
+	if *scene != "" {
+		if *frames == "" {
+			flag.Usage()
+			os.Exit(2)
+		}
+		animate(*scene, *frames, *title, *cols, reps)
+		return
+	}
 	if *in == "" || *out == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
-	data, err := os.ReadFile(*in)
+	lines, err := readLines(*in, reps)
 	if err != nil {
 		fail(err)
 	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	for _, r := range reps {
-		old, nu, ok := strings.Cut(r, "=")
-		if !ok {
-			fail(fmt.Errorf("-replace %q: want OLD=NEW", r))
-		}
-		text = strings.ReplaceAll(text, old, nu)
-	}
-	text = strings.TrimRight(text, "\n ")
-	lines := strings.Split(text, "\n")
 
 	var body strings.Builder
 	maxCols := *cols
@@ -78,6 +92,125 @@ func main() {
 	page := fmt.Sprintf(pageTemplate, w, h, background, titleBar,
 		fontSize, lineHeight, defaultFG, padY, padX, lineHeight, html.EscapeString(*title), body.String())
 	if err := os.WriteFile(*out, []byte(page), 0o644); err != nil {
+		fail(err)
+	}
+	fmt.Printf("%dx%d\n", w, h)
+}
+
+// readLines reads a capture, applies the substitutions and drops trailing
+// blank lines.
+func readLines(path string, reps replaces) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	for _, r := range reps {
+		old, nu, ok := strings.Cut(r, "=")
+		if !ok {
+			return nil, fmt.Errorf("-replace %q: want OLD=NEW", r)
+		}
+		text = strings.ReplaceAll(text, old, nu)
+	}
+	return strings.Split(strings.TrimRight(text, "\n "), "\n"), nil
+}
+
+// Animation timing. Output appears in about revealFrames steps whatever its
+// length, then stays long enough to read.
+const (
+	sceneRows    = 42   // window height in lines; longer output scrolls
+	typePerFrame = 2    // characters typed per frame
+	typeDelay    = 0.05 // seconds per typing frame
+	promptPause  = 0.6  // before typing, and before "Enter"
+	revealFrames = 12
+	revealDelay  = 0.08
+	holdBase     = 2.0 // seconds the whole output stays, plus holdPerLine per line
+	holdPerLine  = 0.04
+	promptColor  = "#8b93a7"
+)
+
+type sceneStep struct {
+	Cmd string `json:"cmd"`
+	In  string `json:"in"`
+}
+
+// animate writes the frames of a scene and the ffconcat list, and prints
+// their common size.
+func animate(scenePath, dir, title string, cols int, reps replaces) {
+	data, err := os.ReadFile(scenePath)
+	if err != nil {
+		fail(err)
+	}
+	var steps []sceneStep
+	if err := json.Unmarshal(data, &steps); err != nil {
+		fail(fmt.Errorf("%s: %w", scenePath, err))
+	}
+	if len(steps) == 0 {
+		fail(fmt.Errorf("%s: no steps", scenePath))
+	}
+	outputs := make([][]string, len(steps))
+	width := cols
+	for i, s := range steps {
+		if outputs[i], err = readLines(s.In, reps); err != nil {
+			fail(err)
+		}
+		width = max(width, utf8.RuneCountInString(s.Cmd)+3)
+		for _, line := range outputs[i] {
+			var discard strings.Builder
+			width = max(width, render(&discard, line))
+		}
+	}
+	w := int(float64(width)*charWidth) + 2*padX
+	h := sceneRows*lineHeight + 2*padY + titleBar
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fail(err)
+	}
+
+	list := []string{"ffconcat version 1.0"}
+	n := 0
+	frame := func(cmd []rune, typed int, cursor bool, lines []string, secs float64) {
+		n++
+		name := fmt.Sprintf("f%04d", n)
+		var body strings.Builder
+		// The screen is the prompt line and the output; once it is taller than
+		// the window, its top scrolls away.
+		skip := max(0, 1+len(lines)-sceneRows)
+		if skip == 0 {
+			body.WriteString(`<span style="color:` + promptColor + `">&gt; </span>`)
+			body.WriteString(html.EscapeString(string(cmd[:typed])))
+			if cursor {
+				body.WriteString(`<i class="c" style="background:` + defaultFG + `"></i>`)
+			}
+			body.WriteString("\n")
+		}
+		for _, line := range lines[max(0, skip-1):] {
+			render(&body, line)
+			body.WriteString("\n")
+		}
+		page := fmt.Sprintf(pageTemplate, w, h, background, titleBar,
+			fontSize, lineHeight, defaultFG, padY, padX, lineHeight, html.EscapeString(title), body.String())
+		if err := os.WriteFile(filepath.Join(dir, name+".html"), []byte(page), 0o644); err != nil {
+			fail(err)
+		}
+		list = append(list, "file '"+name+".png'", fmt.Sprintf("duration %.2f", secs))
+	}
+	for i, s := range steps {
+		cmd := []rune(s.Cmd)
+		frame(cmd, 0, true, nil, promptPause)
+		for t := typePerFrame; t < len(cmd); t += typePerFrame {
+			frame(cmd, t, true, nil, typeDelay)
+		}
+		frame(cmd, len(cmd), true, nil, promptPause)
+		lines := outputs[i]
+		per := max(1, (len(lines)+revealFrames-1)/revealFrames)
+		for k := per; k < len(lines); k += per {
+			frame(cmd, len(cmd), false, lines[:k], revealDelay)
+		}
+		frame(cmd, len(cmd), false, lines, holdBase+holdPerLine*float64(len(lines)))
+	}
+	// ffconcat applies the last duration only when the last file is listed again.
+	list = append(list, fmt.Sprintf("file 'f%04d.png'", n))
+	if err := os.WriteFile(filepath.Join(dir, "frames.txt"), []byte(strings.Join(list, "\n")+"\n"), 0o644); err != nil {
 		fail(err)
 	}
 	fmt.Printf("%dx%d\n", w, h)
