@@ -228,6 +228,8 @@ download:
 gh attestation verify .\oow-0.1.0-windows-amd64.zip --repo Harshul1484/out-of-windows
 ```
 
+How releases are built, what gets signed and who approves it: [code signing policy](docs/CODE_SIGNING.md).
+
 ### Update and uninstall
 
 ```powershell
